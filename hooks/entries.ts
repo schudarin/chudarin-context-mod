@@ -10,14 +10,15 @@ export type Entry = { id: string; label: string; group: GroupId; tokens: number;
 export type GroupTotal = { id: GroupId; label: string; color: string; tokens: number }
 export type Price = { name: string; count: number; average: number }
 
-// Fixed order: a group keeps its color whatever its size. Dark-surface categorical slots
-// (blue, orange, aqua, violet), checked with the dataviz validator against #282828:
-// adjacent CVD ΔE >= 9.4, normal-vision ΔE >= 24.6. Yellow is skipped: it means "warning" here.
+// Fixed order: a group keeps its color whatever its size. Blue, orange, aqua, violet from the
+// dataviz categorical palette, aqua and violet a step darker so one set works on any terminal:
+// checked with the dataviz validator on #000000, #1a1a19, #282828, #eeeeee, #f5f5f0 and #ffffff,
+// every check passing on each. Yellow is skipped: it means "warning" on the meters.
 export const GROUPS: readonly { id: GroupId; text: keyof Strings; color: string }[] = [
   { id: 'tools', text: 'groupTools', color: '#3987e5' },
   { id: 'service', text: 'groupService', color: '#d95926' },
-  { id: 'chat', text: 'groupChat', color: '#199e70' },
-  { id: 'rules', text: 'groupRules', color: '#9085e9' },
+  { id: 'chat', text: 'groupChat', color: '#178f66' },
+  { id: 'rules', text: 'groupRules', color: '#7a6ce4' },
 ]
 
 export function groupLabel(id: GroupId, lang: Lang): string {

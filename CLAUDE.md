@@ -26,7 +26,6 @@ The live look is checked by the user in their own session.
 
 ## Open before publishing
 
-- Light theme: group colors are tuned for a dark surface.
 - Untested surfaces: desktop (tests only), VS Code, mobile.
 - Mods API is early access; pin the minimum Claude Code version.
 - First feedback from a friend.
