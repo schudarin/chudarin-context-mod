@@ -1,0 +1,476 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { Page, Snapshot, Step } from '../types'
+import { GROUPS, actionPrices, buildEntries, groupTotals, insight } from './entries'
+import { helpFor } from './help'
+import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, windowRows } from './model'
+
+const trail = atom({ plugin: 'chudarin-context', key: 'trail' } as const, [])
+const heaviest = atom({ plugin: 'chudarin-context', key: 'heaviest' } as const, null)
+const top = atom({ plugin: 'chudarin-context', key: 'top' } as const, [])
+const snapshot = atom({ plugin: 'chudarin-context', key: 'snapshot' } as const, null)
+const expanded = atom({ plugin: 'chudarin-context', key: 'expanded' } as const, [])
+const page = atom({ plugin: 'chudarin-context', key: 'page' } as const, { kind: 'home' } as Page)
+const bandOn = atom({ plugin: 'chudarin-context', key: 'bandOn' } as const, false)
+
+const PANE = 'chudarin-context'
+const MAX_POINTS = 200
+const BAND_POINTS = 24
+const CHART_ROWS = 6
+const TOP_STEPS = 8
+// Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
+const BLOCK = '▆'
+const EMPTY = '·'
+
+type Level = 'ok' | 'warn' | 'bad'
+const LEVEL_COLOR: Record<Level, 'success' | 'warning' | 'error'> = { ok: 'success', warn: 'warning', bad: 'error' }
+
+function levelOf(percent: number, warn: number, bad: number): Level {
+  return percent > bad ? 'bad' : percent >= warn ? 'warn' : 'ok'
+}
+
+// Split a width among values in proportion, at least one cell for any value above zero.
+function widths(values: readonly number[], width: number): number[] {
+  const sum = values.reduce((a, b) => a + b, 0)
+  if (sum <= 0) return values.map(() => 0)
+  const out = values.map(v => (v > 0 ? Math.max(1, Math.round((v / sum) * width)) : 0))
+  let extra = out.reduce((a, b) => a + b, 0) - width
+  while (extra > 0) {
+    const i = out.indexOf(Math.max(...out))
+    out[i]! -= 1
+    extra -= 1
+  }
+  return out
+}
+
+async function refresh($: EngineInterface) {
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const b = usage.context.breakdown
+  if (!b) return
+  const messages = await $.session.messages({ as: 'api' })
+  const categories = windowRows(b.categories)
+  const entries = buildEntries(categories, detailsFor(b), messages)
+  const next: Snapshot = {
+    entries,
+    prices: actionPrices(messages),
+    limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
+    threshold: b.isAutoCompactEnabled && b.autoCompactThreshold ? b.autoCompactThreshold : usage.context.window,
+    window: usage.context.window,
+    used: entries.reduce((n, e) => n + e.tokens, 0),
+  }
+  await update($, snapshot, () => next)
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    const r = await next(e)
+    await $.command.register({ name: 'ctx', description: 'Панель: что съедает контекст' })
+    await $.command.register({ name: 'ctx-line', description: 'Строка контекста над полем ввода: вкл/выкл' })
+    // Seed right away instead of waiting for the first turn to end.
+    const { context } = await $.session.usage()
+    if (context.tokens !== undefined) {
+      const tokens = context.tokens
+      await update($, trail, prev => (prev.length ? prev : [{ tokens, turn: 1, cause: null }]))
+    }
+    await refresh($)
+    return r
+  })
+
+  on('command.run', { command: 'ctx' }, async $ => {
+    const panes = await $.ui.panes()
+    if (panes.some(p => p.id === PANE)) {
+      await $.ui.close({ id: PANE })
+      return { text: 'Панель контекста закрыта.' }
+    }
+    await update($, page, () => ({ kind: 'home' }) as Page)
+    await $.ui.open({ id: PANE, title: 'Контекст', focus: true, closeOnEscape: true })
+    return { text: 'Панель открыта. Esc или /ctx закрывает.' }
+  })
+
+  on('command.run', { command: 'ctx-line' }, async $ => {
+    const isOn = !(await read($, bandOn))
+    await update($, bandOn, () => isOn)
+    return { text: isOn ? 'Строка контекста включена.' : 'Строка контекста выключена.' }
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    await update($, heaviest, () => null)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    // Rough estimate: ~4 characters per token.
+    const tokens = Math.round((r.text?.length ?? 0) / 4)
+    const step: Step = { label: label(e as Record<string, unknown>), tokens }
+    await update($, heaviest, prev => (prev && prev.tokens >= tokens ? prev : step))
+    await update($, top, prev => [...prev, step].sort((a, b) => b.tokens - a.tokens).slice(0, TOP_STEPS))
+    return r
+  }).catch(($, e, next) => next(e))
+
+  on('session.measure', async ($, e, next) => {
+    const tokens = e.context.tokens
+    if (tokens !== undefined) {
+      const cause = (await read($, heaviest))?.label ?? null
+      await update($, trail, prev => {
+        const last = prev[prev.length - 1]
+        if (last?.tokens === tokens) return prev
+        return [...prev, { tokens, turn: (last?.turn ?? 0) + 1, cause }].slice(-MAX_POINTS)
+      })
+    }
+    await refresh($)
+    return next(e)
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey || !(await read($, bandOn))) return next(e)
+    const points = (await read($, trail)).slice(-BAND_POINTS).map(p => p.tokens)
+    const total = points[points.length - 1]
+    const snap = await read($, snapshot)
+    if (total === undefined || !snap) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    return (
+      <Box>
+        <Text dimColor>
+          ctx {k(total)} из {k(snap.window)} · {Math.round((total / snap.window) * 100)}%{' '}
+          <Text color="suggestion">{sparkline(points)}</Text>
+          {'  /ctx'}
+        </Text>
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    try {
+      const { Box, Button, Text } = $.ui.resolve(e)
+      const snap = await read($, snapshot)
+      if (!snap) return <Text dimColor>Нет данных до первого ответа.</Text>
+
+      const points = await read($, trail)
+      const steps = await read($, top)
+      const open = await read($, expanded)
+      const where = await read($, page)
+      const now = await $.clock.now()
+      const W = Math.max(40, e.props.bodyColumns)
+      // One grid for every list: name, tokens, share, then a bar or a chevron.
+      const NAME = 30
+      const NUM = 7
+      const PCT = 6
+      // An empty row where column labels used to be: keeps the rhythm without the words.
+      const columnsHead = <Text> </Text>
+      const go = (to: Page) => () => update($, page, () => to)
+      const pctOfUsed = (n: number) => (snap.used ? `${Math.round((n / snap.used) * 100)}%` : '')
+      const ofUsed = (n: number) => `${k(n)} · ${pctOfUsed(n)} занятого`
+      const total = points[points.length - 1]?.tokens ?? snap.used
+
+      const back = (to: Page) => (
+        <Box flexDirection="column">
+          <Button key="back" plain label="← Назад" onPress={go(to)}>
+            <Text dimColor>← Назад</Text>
+          </Button>
+          <Text> </Text>
+        </Box>
+      )
+      // A title with a figure on the right; `edge` is the column the figure ends at.
+      const titleRow = (title: string, right: string, edge = W) => (
+        <Text>
+          <Text bold>{title.toUpperCase()}</Text>
+          <Text dimColor>{right.padStart(Math.max(1, edge - title.length))}</Text>
+        </Text>
+      )
+
+      // ---- entry page: what it is, why so much, what to do ----
+      if (where.kind === 'entry') {
+        const entry = snap.entries.find(x => x.id === where.id)
+        const help = helpFor(where.id)
+        const parent: Page = { kind: 'group', id: entry?.group ?? help.group }
+        if (!entry)
+          return (
+            <Box flexDirection="column">
+              {back(parent)}
+              <Text dimColor>Этого пункта сейчас нет в контексте.</Text>
+            </Box>
+          )
+        const average = entry.count ? Math.round(entry.tokens / entry.count) : 0
+        return (
+          <Box flexDirection="column">
+            {back(parent)}
+            {titleRow(entry.label, ofUsed(entry.tokens))}
+            <Text> </Text>
+            <Text bold>Что это</Text>
+            <Box paddingLeft={2}>
+              <Text>{help.what}</Text>
+            </Box>
+            <Text> </Text>
+            <Text bold>Почему столько</Text>
+            <Box paddingLeft={2} flexDirection="column">
+              <Text>{entry.count > 1 ? `${entry.count} раз, в среднем ${k(average)} за раз` : '1 раз'}</Text>
+              {entry.top.length > 0 && <Text dimColor>Самые тяжёлые:</Text>}
+              {entry.top.map(c => (
+                <Text wrap="truncate-end">
+                  {`+${k(c.tokens)}`.padStart(7)}
+                  {'  '}
+                  {c.label}
+                </Text>
+              ))}
+            </Box>
+            <Text> </Text>
+            <Text bold>Что делать</Text>
+            <Box paddingLeft={2}>
+              <Text>{help.todo ?? 'Ничего: это постоянная часть работы Claude Code.'}</Text>
+            </Box>
+          </Box>
+        )
+      }
+
+      // ---- group page: its entries ----
+      if (where.kind === 'group') {
+        const group = GROUPS.find(g => g.id === where.id) ?? GROUPS[0]!
+        const list = snap.entries.filter(x => x.group === group.id)
+        const sum = list.reduce((n, x) => n + x.tokens, 0)
+        const max = Math.max(0, ...list.map(x => x.tokens))
+        const barW = Math.max(4, W - NAME - NUM - PCT - 4)
+        return (
+          <Box flexDirection="column">
+            {back({ kind: 'home' })}
+            {titleRow(group.label, ofUsed(sum))}
+            <Text> </Text>
+            {columnsHead}
+            {list.length === 0 && <Text dimColor>Здесь пока пусто.</Text>}
+            {list.map(x => {
+              // Only the name is the button: the pointer inverts a button, and an inverted bar breaks.
+              const name = x.label.slice(0, NAME - 1)
+              return (
+                <Box key={`row-${x.id}`} flexDirection="row">
+                  <Button key={`entry-${x.id}`} plain label={x.label} onPress={go({ kind: 'entry', id: x.id })}>
+                    {name}
+                  </Button>
+                  <Text>
+                    {' '.repeat(NAME - name.length)}
+                    {k(x.tokens).padStart(NUM)}
+                    <Text dimColor>{pctOfUsed(x.tokens).padStart(PCT)}</Text>
+                    {'  '}
+                    <Text color={group.color}>
+                      {BLOCK.repeat(max > 0 ? Math.max(1, Math.round((x.tokens / max) * barW)) : 0).padEnd(barW)}
+                    </Text>
+                    <Text dimColor> ▸</Text>
+                  </Text>
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      }
+
+      // ---- home ----
+      const v = pace(points)
+      const fill = snap.window ? (total / snap.window) * 100 : 0
+      const turnsLeft = v.recent > 0 ? Math.floor((snap.threshold - total) / v.recent) : null
+      const limit = (re: RegExp) => snap.limits.find(l => re.test(l.kind) && !/fable/i.test(l.kind))
+      const five = limit(/five_hour/)
+      const week = limit(/seven_day/)
+      const tiles = [
+        {
+          title: 'КОНТЕКСТ',
+          percent: fill,
+          level: levelOf((total / snap.threshold) * 100, 50, 80),
+          lines: [`${k(total)} из ${k(snap.window)}`, turnsLeft !== null ? `хватит на ~${turnsLeft} ходов` : ''],
+        },
+        ...(five
+          ? [
+              {
+                title: 'ЛИМИТ 5 Ч',
+                percent: five.percentUsed,
+                level: levelOf(five.percentUsed, 70, 90),
+                lines: [five.resetsAt ? `сброс ${resetLabel(five.resetsAt, now)}` : '', ''],
+              },
+            ]
+          : []),
+        ...(week
+          ? [
+              {
+                title: 'ЛИМИТ НЕДЕЛЯ',
+                percent: week.percentUsed,
+                level: levelOf(week.percentUsed, 70, 90),
+                lines: [week.resetsAt ? `сброс ${resetLabel(week.resetsAt, now)}` : '', ''],
+              },
+            ]
+          : []),
+      ]
+      const gap = 2
+      const colW = Math.floor((W - gap * (tiles.length - 1)) / tiles.length)
+      const meterW = Math.max(6, colW - 2)
+      const cell = (text: string, i: number) => text.padEnd(colW + (i < tiles.length - 1 ? gap : 0)).slice(0, colW + gap)
+
+      const groups = groupTotals(snap.entries)
+      const usedGroups = groups.filter(g => g.tokens > 0)
+      const stack = widths(
+        usedGroups.map(g => g.tokens),
+        W - (usedGroups.length - 1),
+      )
+      const hint = insight(snap.entries, fill, snap.used)
+      const prices = snap.prices.slice(0, 6)
+      const half = Math.ceil(prices.length / 2)
+      const priceW = Math.floor((W - 4) / 2)
+      const toggle = (id: string) => () =>
+        update($, expanded, prev => (prev.includes(id) ? prev.filter(n => n !== id) : [...prev, id]))
+      const isOpen = (id: string) => open.includes(id)
+      const shown = points.slice(-Math.max(10, W - 8))
+      const chartMax = Math.max(0, ...shown.map(p => p.tokens))
+
+      return (
+        <Box flexDirection="column">
+          {/* three tiles on one grid */}
+          <Text>
+            {tiles.map((t, i) => (
+              <Text bold dimColor>
+                {cell(t.title, i)}
+              </Text>
+            ))}
+          </Text>
+          <Text>
+            {tiles.map((t, i) => (
+              <Text bold color={LEVEL_COLOR[t.level]}>
+                {cell(`${Math.round(t.percent)}%`, i)}
+              </Text>
+            ))}
+          </Text>
+          <Text>
+            {tiles.map((t, i) => {
+              const n = Math.min(meterW, Math.max(t.percent > 0 ? 1 : 0, Math.round((t.percent / 100) * meterW)))
+              return (
+                <Text>
+                  <Text color={LEVEL_COLOR[t.level]}>{BLOCK.repeat(n)}</Text>
+                  <Text dimColor>{EMPTY.repeat(meterW - n)}</Text>
+                  {' '.repeat(colW - meterW + (i < tiles.length - 1 ? gap : 0))}
+                </Text>
+              )
+            })}
+          </Text>
+          {[0, 1].map(row =>
+            tiles.some(t => t.lines[row]) ? (
+              <Text dimColor>{tiles.map((t, i) => cell(t.lines[row] ?? '', i)).join('')}</Text>
+            ) : null,
+          )}
+          <Text> </Text>
+
+          {/* what fills the window */}
+          {titleRow('Чем занят контекст', k(snap.used))}
+          <Text>
+            {usedGroups.map((g, i) => (
+              <Text>
+                {i > 0 ? ' ' : ''}
+                <Text color={g.color}>{BLOCK.repeat(stack[i] ?? 0)}</Text>
+              </Text>
+            ))}
+          </Text>
+          {columnsHead}
+          {usedGroups.map(g => {
+            const name = g.label.slice(0, NAME - 3)
+            return (
+              <Box key={`row-${g.id}`} flexDirection="row">
+                <Text color={g.color}>■ </Text>
+                <Button key={`group-${g.id}`} plain label={g.label} onPress={go({ kind: 'group', id: g.id })}>
+                  {name}
+                </Button>
+                <Text>
+                  {' '.repeat(NAME - 2 - name.length)}
+                  {k(g.tokens).padStart(NUM)}
+                  <Text dimColor>{pctOfUsed(g.tokens).padStart(PCT)}</Text>
+                  <Text dimColor>{'  ▸'}</Text>
+                </Text>
+              </Box>
+            )
+          })}
+          {hint && (
+            <Box flexDirection="column">
+              <Text> </Text>
+              <Text>
+                <Text bold color="claude">
+                  →{' '}
+                </Text>
+                {hint}
+              </Text>
+            </Box>
+          )}
+          <Text> </Text>
+
+          {/* what one action costs */}
+          <Text bold>СКОЛЬКО СТОИТ ДЕЙСТВИЕ</Text>
+          <Text dimColor>средняя цена одного раза: чем дешевле способ, тем дольше хватит контекста</Text>
+          {prices.length === 0 && <Text dimColor>Пока нет действий.</Text>}
+          {Array.from({ length: half }, (_, row) => {
+            const left = prices[row]
+            const right = prices[row + half]
+            const priceCell = (p: typeof left) =>
+              p ? `${p.name.padEnd(priceW - 7).slice(0, priceW - 7)}${k(p.average).padStart(5)}` : ''
+            return (
+              <Text>
+                {priceCell(left).padEnd(priceW + 4)}
+                {priceCell(right)}
+              </Text>
+            )
+          })}
+          <Text> </Text>
+
+          {/* folded details */}
+          <Button key="block-dynamics" plain label="Как рос контекст" onPress={toggle('block:dynamics')}>
+            <Text>
+              <Text dimColor>{isOpen('block:dynamics') ? '▾ ' : '▸ '}</Text>Как рос контекст
+            </Text>
+          </Button>
+          {isOpen('block:dynamics') && (
+            <Box flexDirection="column" paddingLeft={2}>
+              <Text dimColor>
+                в среднем +{k(Math.round(v.overall))} за ход, последние 5 ходов +{k(Math.round(v.recent))}
+              </Text>
+              {chartRows(
+                shown.map(p => p.tokens),
+                CHART_ROWS,
+              ).map((line, i) => (
+                <Text>
+                  <Text dimColor>{(i === 0 ? k(chartMax) : '').padStart(5)} </Text>
+                  <Text color="suggestion">{line}</Text>
+                </Text>
+              ))}
+              <Text dimColor>
+                {'    0 '}
+                {shown.length > 1 ? `ход ${shown[0]!.turn} → ход ${shown[shown.length - 1]!.turn}` : ''}
+              </Text>
+              {jumps(shown, 3).map(j => (
+                <Text wrap="truncate-end">
+                  {`+${k(j.delta)}`.padStart(6)}
+                  <Text dimColor>{`  ход ${j.turn}  `}</Text>
+                  {j.cause ?? 'переписка'}
+                </Text>
+              ))}
+            </Box>
+          )}
+          <Button key="block-steps" plain label="Самые тяжёлые шаги" onPress={toggle('block:steps')}>
+            <Text>
+              <Text dimColor>{isOpen('block:steps') ? '▾ ' : '▸ '}</Text>Самые тяжёлые шаги
+            </Text>
+          </Button>
+          {isOpen('block:steps') && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {steps.length === 0 && <Text dimColor>Пока нет шагов.</Text>}
+              {steps.map(s => (
+                <Text wrap="truncate-end">
+                  {`+${k(s.tokens)}`.padStart(6)}
+                  {'  '}
+                  <Text dimColor>{s.label}</Text>
+                </Text>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )
+    } catch (err) {
+      const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+      $.ui.log(`chudarin-context: pane render failed: ${text}`)
+      const { Text } = $.ui.resolve(e)
+      return <Text color="error">chudarin-context: отрисовка упала: {text}</Text>
+    }
+  })
+}
