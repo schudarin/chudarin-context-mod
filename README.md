@@ -24,7 +24,7 @@ in plain words what it is, why it's that big, and what you can do about it.
 
 ## 👀 What you see
 
-![The panel's home page](assets/ru-home.png)
+![The panel's home page](assets/en-home.png)
 
 From top to bottom:
 
@@ -45,10 +45,9 @@ Click a group to see its items, click an item to get its help page:
 
 | A group | An item |
 |---|---|
-| ![Tool work, item by item](assets/ru-group.png) | ![Bash output: what it is, why so much, what to do](assets/ru-item.png) |
+| ![Tool work, item by item](assets/en-group.png) | ![Bash output: what it is, why so much, what to do](assets/en-item.png) |
 
-The screenshots are from a Russian session. The panel speaks English unless Claude Code's
-`language` setting is Russian.
+The panel speaks English unless Claude Code's `language` setting is Russian.
 
 ## 📦 Install
 

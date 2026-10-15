@@ -29,5 +29,4 @@ The live look is checked by the user in their own session.
 
 - Untested surfaces: desktop (tests only), VS Code, mobile.
 - Mods API is early access; README says "built and tested on Claude Code 2.1.300".
-- Screenshots in README are Russian; English ones would read better on the English page.
 - Published through the `chudarin` catalog (marketplace.json in repo chudarin-design-skills, entry with `source: github`); this repo has no marketplace of its own.
