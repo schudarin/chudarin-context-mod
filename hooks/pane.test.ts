@@ -41,10 +41,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
   test(`pane says it has no data yet on ${surface}`, async ($, on) => {
     on('clock.now', () => ({ value: 0 }) as never)
     const ui = await $.ui.mount({
-      plugin: 'chudarin-context',
+      plugin: 'chudarin-context-mod',
       surface,
       component: 'Pane',
-      requestId: 'chudarin-context',
+      requestId: 'chudarin-context-mod',
       props: props as never,
     })
     expect(JSON.stringify(await ui.drawn())).toContain('No data')
@@ -63,10 +63,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
       on('session.id', () => ({ value: 'test-session' }) as never)
       await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
       const ui = await $.ui.mount({
-        plugin: 'chudarin-context',
+        plugin: 'chudarin-context-mod',
         surface,
         component: 'Pane',
-        requestId: 'chudarin-context',
+        requestId: 'chudarin-context-mod',
         props: props as never,
       })
       const drawn = async () => JSON.stringify(await ui.drawn())

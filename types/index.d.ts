@@ -41,7 +41,7 @@ export type Page = { kind: 'home' } | { kind: 'group'; id: string } | { kind: 'e
 
 declare module 'claude-code' {
   interface PluginState {
-    'chudarin-context': {
+    'chudarin-context-mod': {
       log: SessionLog | null
       heaviest: Step | null
       top: Step[]

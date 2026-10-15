@@ -8,16 +8,16 @@ import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
 import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, windowRows } from './model'
 
-const log = atom({ plugin: 'chudarin-context', key: 'log' } as const, null)
-const heaviest = atom({ plugin: 'chudarin-context', key: 'heaviest' } as const, null)
-const top = atom({ plugin: 'chudarin-context', key: 'top' } as const, [])
-const snapshot = atom({ plugin: 'chudarin-context', key: 'snapshot' } as const, null)
-const expanded = atom({ plugin: 'chudarin-context', key: 'expanded' } as const, [])
-const page = atom({ plugin: 'chudarin-context', key: 'page' } as const, { kind: 'home' } as Page)
-const bandOn = atom({ plugin: 'chudarin-context', key: 'bandOn' } as const, false)
-const lang = atom({ plugin: 'chudarin-context', key: 'lang' } as const, 'en' as Lang)
+const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
+const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
+const top = atom({ plugin: 'chudarin-context-mod', key: 'top' } as const, [])
+const snapshot = atom({ plugin: 'chudarin-context-mod', key: 'snapshot' } as const, null)
+const expanded = atom({ plugin: 'chudarin-context-mod', key: 'expanded' } as const, [])
+const page = atom({ plugin: 'chudarin-context-mod', key: 'page' } as const, { kind: 'home' } as Page)
+const bandOn = atom({ plugin: 'chudarin-context-mod', key: 'bandOn' } as const, false)
+const lang = atom({ plugin: 'chudarin-context-mod', key: 'lang' } as const, 'en' as Lang)
 
-const PANE = 'chudarin-context'
+const PANE = 'chudarin-context-mod'
 // Session logs kept in the store; older ones are dropped.
 const KEEP_SESSIONS = 30
 const BAND_POINTS = 24
@@ -163,7 +163,7 @@ export const register: Register = on => {
     if (tokens !== undefined) {
       const cause = (await read($, heaviest))?.label ?? null
       // The log is a nice-to-have: a failure here must not stop the panel's refresh.
-      await saveLog($, l => addPoint(l, tokens, cause)).catch(err => $.ui.log(`chudarin-context: log not saved: ${String(err)}`))
+      await saveLog($, l => addPoint(l, tokens, cause)).catch(err => $.ui.log(`chudarin-context-mod: log not saved: ${String(err)}`))
     }
     await refresh($)
     return next(e)
@@ -560,9 +560,9 @@ export const register: Register = on => {
       )
     } catch (err) {
       const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
-      $.ui.log(`chudarin-context: pane render failed: ${text}`)
+      $.ui.log(`chudarin-context-mod: pane render failed: ${text}`)
       const { Text } = $.ui.resolve(e)
-      return <Text color="error">chudarin-context: {text}</Text>
+      return <Text color="error">chudarin-context-mod: {text}</Text>
     }
   })
 }

@@ -1,5 +1,5 @@
 {
-  "name": "chudarin-context",
+  "name": "chudarin-context-mod",
   "version": "0.1.0",
   "description": "A Claude Code mod: a side panel that shows what fills your context window, what your plan limits look like, and what each kind of action costs, with plain-language help for every item.",
   "author": {
@@ -8,6 +8,14 @@
   },
   "homepage": "https://chudarin.com",
   "license": "MIT",
-  "keywords": ["context", "tokens", "mod", "dashboard"],
-  "types": "./types/index.d.ts"
+  "keywords": [
+    "context",
+    "tokens",
+    "limits",
+    "mod",
+    "dashboard",
+    "claude-code"
+  ],
+  "types": "./types/index.d.ts",
+  "repository": "https://github.com/schudarin/chudarin-context-mod"
 }

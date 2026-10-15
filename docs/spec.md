@@ -1,4 +1,4 @@
-# chudarin-context — спецификация v3 (2026-10-15)
+# chudarin-context-mod — спецификация v3 (2026-10-15)
 
 ## Цель
 
