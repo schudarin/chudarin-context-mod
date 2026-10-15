@@ -25,8 +25,13 @@ claude plugin test .
 Write build/test output to a log file and read the file (a hook refuses `| tail`).
 The live look is checked by the user in their own session.
 
-## Open before publishing
+## Published
+
+Public since 2026-10-15: github.com/schudarin/chudarin-context-mod. Installs through the `chudarin` catalog:
+`/plugin marketplace add schudarin/chudarin-design-skills` → `/plugin install chudarin-context-mod@chudarin`.
+On the maintainer's machine the dev copy loads via `CLAUDE_CODE_PLUGIN_DIRS`; don't also install it from the catalog there, or it loads twice.
+
+## Still open
 
 - Untested surfaces: desktop (tests only), VS Code, mobile.
 - Mods API is early access; README says "built and tested on Claude Code 2.1.300".
-- Published through the `chudarin` catalog (marketplace.json in repo chudarin-design-skills, entry with `source: github`); this repo has no marketplace of its own.
