@@ -220,7 +220,6 @@ export function actionPrices(messages: readonly Message[], lang: Lang): Price[] 
 
 // One line worth acting on, or nothing.
 export function insight(entries: readonly Entry[], fill: number, used: number, lang: Lang): string | null {
-  if (fill > 50) return UI[lang].fillInsight(Math.round(fill))
   for (const e of entries) {
     const help = helpFor(e.id, lang)
     if (!help.todo) continue

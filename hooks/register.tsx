@@ -207,6 +207,13 @@ export const register: Register = on => {
       const PCT = 6
       // An empty row where column labels used to be: keeps the rhythm without the words.
       const columnsHead = <Text> </Text>
+      // Two empty rows between the home page's main blocks.
+      const sectionGap = (
+        <Box flexDirection="column">
+          <Text> </Text>
+          <Text> </Text>
+        </Box>
+      )
       const go = (to: Page) => () => update($, page, () => to)
       const pctOfUsed = (n: number) => (snap.used ? `${Math.round((n / snap.used) * 100)}%` : '')
       const ofUsed = (n: number) => t.ofUsed(k(n), pctOfUsed(n))
@@ -401,7 +408,7 @@ export const register: Register = on => {
               <Text dimColor>{tiles.map((t, i) => cell(t.lines[row] ?? '', i)).join('')}</Text>
             ) : null,
           )}
-          <Text> </Text>
+          {sectionGap}
 
           {/* what fills the window */}
           {titleRow(t.whatFills, k(snap.used))}
@@ -442,7 +449,7 @@ export const register: Register = on => {
               </Text>
             </Box>
           )}
-          <Text> </Text>
+          {sectionGap}
 
           {/* what one action costs */}
           <Text bold>{t.prices.toUpperCase()}</Text>
@@ -460,7 +467,7 @@ export const register: Register = on => {
               </Text>
             )
           })}
-          <Text> </Text>
+          {sectionGap}
 
           {/* the whole session, compactions included */}
           {session && session.requests > 0 && (
@@ -493,7 +500,7 @@ export const register: Register = on => {
                 )}
               </Text>
               <Text dimColor>{t.sessionHint}</Text>
-              <Text> </Text>
+              {sectionGap}
             </Box>
           )}
 

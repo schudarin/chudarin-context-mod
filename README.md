@@ -32,8 +32,8 @@ From top to bottom:
   meter, roughly how many turns are left before auto-compaction at the current pace.
 - **What fills the context.** One bar for the whole window, split into four groups: tool work,
   Claude Code itself, your conversation, skills and rules. Click a group to open it.
-- **A hint.** One line, only when there is something to do. "The context is 55% full. If the task
-  has changed: /compact or a new session."
+- **A hint.** One line, only when one item is big and you can do something about it: "Bash output
+  took 61k. Send long output to a file and read only what you need."
 - **What an action costs.** The average price of one screenshot, one file written, one Bash command,
   one skill. This is the part that teaches: you see which habits are expensive.
 - **This session.** Everything the model has read across all requests, how much of it came from

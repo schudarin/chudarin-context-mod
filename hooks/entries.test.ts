@@ -90,7 +90,8 @@ test('actionPrices counts the whole call: what I sent plus what came back', () =
 test('insight speaks only when there is something to do', () => {
   const entries = buildEntries(categories, {}, messages, 'ru')
   const used = entries.reduce((n, e) => n + e.tokens, 0)
-  expect(insight(entries, 60, used, 'ru')).toContain('/compact')
+  // A full context is shown by the meter; the hint line only names something to act on.
+  expect(insight(entries, 60, used, 'ru') ?? '').not.toContain('/compact')
   // System tools is the biggest entry here, but nothing can be done about it.
   expect(insight(entries, 20, used, 'ru')).not.toContain('инструментов')
   expect(insight([], 20, 100, 'ru')).toBe(null)
