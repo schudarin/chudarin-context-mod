@@ -6,7 +6,8 @@ Claude Code mod: side panel `/ctx` with context usage, limits, action prices and
 
 - `hooks/register.tsx` — hooks, pages, rendering.
 - `hooks/entries.ts` — groups, entries, action prices, insight.
-- `hooks/help.ts` — plain-language names and help per entry.
+- `hooks/help.ts` — plain-language names and help per entry, Russian and English.
+- `hooks/i18n.ts` — every interface string in Russian and English; language follows Claude Code's `language` setting (Russian → ru, else en).
 - `hooks/model.ts` — formatting, chart, verdict maths.
 - `hooks/history.ts` — session log (tokens read/written per request, context per turn, compactions), kept in `$.store` under `session:<id>`, last 30 sessions.
 - `types/index.d.ts` — `$.state` contract.
@@ -25,7 +26,6 @@ The live look is checked by the user in their own session.
 
 ## Open before publishing
 
-- English UI (now Russian only).
 - Light theme: group colors are tuned for a dark surface.
 - Untested surfaces: desktop (tests only), VS Code, mobile.
 - Mods API is early access; pin the minimum Claude Code version.

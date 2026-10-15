@@ -35,7 +35,7 @@ const categories = [
 ]
 
 test('buildEntries sorts the conversation and categories into the four groups', () => {
-  const entries = buildEntries(categories, { Skills: [{ name: 'dataviz', tokens: 480 }] }, messages)
+  const entries = buildEntries(categories, { Skills: [{ name: 'dataviz', tokens: 480 }] }, messages, 'ru')
   const by = Object.fromEntries(entries.map(e => [e.id, e]))
 
   expect(by['result:Bash']!.group).toBe('tools')
@@ -58,27 +58,27 @@ test('buildEntries sorts the conversation and categories into the four groups', 
 
 test('conversation entries are scaled to the measured Messages total', () => {
   const measured = categories.map(c => (c.name === 'Messages' ? { ...c, tokens: 10_000 } : c))
-  const entries = buildEntries(measured, {}, messages)
+  const entries = buildEntries(measured, {}, messages, 'ru')
   const fromMessages = entries.filter(e => !e.id.startsWith('cat:')).reduce((n, e) => n + e.tokens, 0)
   expect(Math.abs(fromMessages - 10_000)).toBeLessThan(10)
 })
 
 test('groupTotals keeps the fixed group order with their totals', () => {
-  const totals = groupTotals(buildEntries(categories, {}, messages))
+  const totals = groupTotals(buildEntries(categories, {}, messages, 'ru'), 'ru')
   expect(totals.map(t => t.id)).toEqual(GROUPS.map(g => g.id))
   expect(totals.find(t => t.id === 'service')!.tokens).toBeGreaterThan(27_000)
 })
 
 test('every entry has help text', () => {
-  for (const e of buildEntries(categories, {}, messages)) {
-    const help = helpFor(e.id)
+  for (const e of buildEntries(categories, {}, messages, 'en')) {
+    const help = helpFor(e.id, 'en')
     expect(help.what.length).toBeGreaterThan(10)
   }
-  expect(helpFor('cat:Something new').what.length).toBeGreaterThan(10)
+  expect(helpFor('cat:Something new', 'en').what.length).toBeGreaterThan(10)
 })
 
 test('actionPrices counts the whole call: what I sent plus what came back', () => {
-  const prices = actionPrices(messages)
+  const prices = actionPrices(messages, 'ru')
   const by = Object.fromEntries(prices.map(p => [p.name, p]))
   expect(by['Записать файл']!.average).toBeGreaterThan(1000)
   expect(by['Команда в Bash']!.average).toBeGreaterThan(2000)
@@ -88,12 +88,21 @@ test('actionPrices counts the whole call: what I sent plus what came back', () =
 })
 
 test('insight speaks only when there is something to do', () => {
-  const entries = buildEntries(categories, {}, messages)
+  const entries = buildEntries(categories, {}, messages, 'ru')
   const used = entries.reduce((n, e) => n + e.tokens, 0)
-  expect(insight(entries, 60, used)).toContain('/compact')
+  expect(insight(entries, 60, used, 'ru')).toContain('/compact')
   // System tools is the biggest entry here, but nothing can be done about it.
-  expect(insight(entries, 20, used)).not.toContain('инструментов')
-  expect(insight([], 20, 100)).toBe(null)
+  expect(insight(entries, 20, used, 'ru')).not.toContain('инструментов')
+  expect(insight([], 20, 100, 'ru')).toBe(null)
   const bash = [{ id: 'result:Bash', label: 'Вывод команд Bash', group: 'tools' as const, tokens: 61_000, count: 3, top: [] }]
-  expect(insight(bash, 20, 300_000)).toBe('Вывод команд Bash занял 61k. Пиши длинный вывод в файл и читай нужное.')
+  expect(insight(bash, 20, 300_000, 'ru')).toBe('Вывод команд Bash занял 61k. Пиши длинный вывод в файл и читай нужное.')
+})
+
+test('English labels and prices', () => {
+  const entries = buildEntries(categories, {}, messages, 'en')
+  expect(entries.find(e => e.id === 'code')!.label).toBe('Code Claude wrote')
+  expect(groupTotals(entries, 'en')[0]!.label).toBe('Tool work')
+  expect(actionPrices(messages, 'en').some(p => p.name === 'Write a file')).toBe(true)
+  const bash = [{ id: 'result:Bash', label: 'Bash output', group: 'tools' as const, tokens: 61_000, count: 3, top: [] }]
+  expect(insight(bash, 20, 300_000, 'en')).toBe('Bash output took 61k. Send long output to a file and read only what you need.')
 })

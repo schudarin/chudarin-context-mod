@@ -20,6 +20,7 @@ export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
 
 // Everything the pane reads, refreshed after each turn.
 export type Snapshot = {
+  lang: 'ru' | 'en'
   entries: {
     id: string
     label: string
@@ -48,6 +49,7 @@ declare module 'claude-code' {
       expanded: string[]
       page: Page
       bandOn: boolean
+      lang: 'ru' | 'en'
     }
   }
 }

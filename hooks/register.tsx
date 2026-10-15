@@ -2,8 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Page, SessionLog, Snapshot, Step } from '../types'
-import { GROUPS, actionPrices, buildEntries, groupTotals, insight } from './entries'
+import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
 import { helpFor } from './help'
+import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
 import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, windowRows } from './model'
 
@@ -14,6 +15,7 @@ const snapshot = atom({ plugin: 'chudarin-context', key: 'snapshot' } as const, 
 const expanded = atom({ plugin: 'chudarin-context', key: 'expanded' } as const, [])
 const page = atom({ plugin: 'chudarin-context', key: 'page' } as const, { kind: 'home' } as Page)
 const bandOn = atom({ plugin: 'chudarin-context', key: 'bandOn' } as const, false)
+const lang = atom({ plugin: 'chudarin-context', key: 'lang' } as const, 'en' as Lang)
 
 const PANE = 'chudarin-context'
 // Session logs kept in the store; older ones are dropped.
@@ -24,7 +26,6 @@ const TOP_STEPS = 8
 // Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
 const BLOCK = '▆'
 const EMPTY = '·'
-const COMPACT_TRIGGER: Record<string, string> = { manual: 'вручную', auto: 'автоматически', plugin: 'плагином' }
 
 type Level = 'ok' | 'warn' | 'bad'
 const LEVEL_COLOR: Record<Level, 'success' | 'warning' | 'error'> = { ok: 'success', warn: 'warning', bad: 'error' }
@@ -56,16 +57,25 @@ async function saveLog($: EngineInterface, change: (l: SessionLog) => SessionLog
   if (next) await $.store.set(sessionKey(id), next)
 }
 
+// Claude Code's `language` setting decides the panel's language.
+async function readLang($: EngineInterface): Promise<Lang> {
+  const settings = await $.settings.read().catch(() => ({}) as Record<string, unknown>)
+  return langOf(settings.language)
+}
+
 async function refresh($: EngineInterface) {
+  const l = await readLang($)
+  await update($, lang, () => l)
   const usage = await $.session.usage({ breakdown: 'summary' })
   const b = usage.context.breakdown
   if (!b) return
   const messages = await $.session.messages({ as: 'api' })
   const categories = windowRows(b.categories)
-  const entries = buildEntries(categories, detailsFor(b), messages)
+  const entries = buildEntries(categories, detailsFor(b), messages, l)
   const next: Snapshot = {
+    lang: l,
     entries,
-    prices: actionPrices(messages),
+    prices: actionPrices(messages, l),
     limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
     threshold: b.isAutoCompactEnabled && b.autoCompactThreshold ? b.autoCompactThreshold : usage.context.window,
     window: usage.context.window,
@@ -77,8 +87,9 @@ async function refresh($: EngineInterface) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
-    await $.command.register({ name: 'ctx', description: 'Панель: что съедает контекст' })
-    await $.command.register({ name: 'ctx-line', description: 'Строка контекста над полем ввода: вкл/выкл' })
+    const t0 = UI[await readLang($)]
+    await $.command.register({ name: 'ctx', description: t0.cmdPanel })
+    await $.command.register({ name: 'ctx-line', description: t0.cmdLine })
     // Pick up this session's log (after a restart or --resume), or start one.
     const id = await $.session.id()
     const stored = (await $.store.get(sessionKey(id))) as SessionLog | undefined
@@ -95,20 +106,22 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'ctx' }, async $ => {
+    const t = UI[await read($, lang)]
     const panes = await $.ui.panes()
     if (panes.some(p => p.id === PANE)) {
       await $.ui.close({ id: PANE })
-      return { text: 'Панель контекста закрыта.' }
+      return { text: t.panelClosed }
     }
     await update($, page, () => ({ kind: 'home' }) as Page)
-    await $.ui.open({ id: PANE, title: 'Контекст', focus: true, closeOnEscape: true })
-    return { text: 'Панель открыта. Esc или /ctx закрывает.' }
+    await $.ui.open({ id: PANE, title: t.paneTitle, focus: true, closeOnEscape: true })
+    return { text: t.panelOpened }
   })
 
   on('command.run', { command: 'ctx-line' }, async $ => {
+    const t = UI[await read($, lang)]
     const isOn = !(await read($, bandOn))
     await update($, bandOn, () => isOn)
-    return { text: isOn ? 'Строка контекста включена.' : 'Строка контекста выключена.' }
+    return { text: isOn ? t.lineOn : t.lineOff }
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -166,7 +179,7 @@ export const register: Register = on => {
     return (
       <Box>
         <Text dimColor>
-          ctx {k(total)} из {k(snap.window)} · {Math.round((total / snap.window) * 100)}%{' '}
+          ctx {UI[snap.lang].ofWindow(k(total), k(snap.window))} · {Math.round((total / snap.window) * 100)}%{' '}
           <Text color="suggestion">{sparkline(points)}</Text>
           {'  /ctx'}
         </Text>
@@ -178,7 +191,8 @@ export const register: Register = on => {
     try {
       const { Box, Button, Text } = $.ui.resolve(e)
       const snap = await read($, snapshot)
-      if (!snap) return <Text dimColor>Нет данных до первого ответа.</Text>
+      const t = UI[await read($, lang)]
+      if (!snap) return <Text dimColor>{t.noData}</Text>
 
       const session = await read($, log)
       const points = session?.points ?? []
@@ -195,13 +209,13 @@ export const register: Register = on => {
       const columnsHead = <Text> </Text>
       const go = (to: Page) => () => update($, page, () => to)
       const pctOfUsed = (n: number) => (snap.used ? `${Math.round((n / snap.used) * 100)}%` : '')
-      const ofUsed = (n: number) => `${k(n)} · ${pctOfUsed(n)} занятого`
+      const ofUsed = (n: number) => t.ofUsed(k(n), pctOfUsed(n))
       const total = points[points.length - 1]?.tokens ?? snap.used
 
       const back = (to: Page) => (
         <Box flexDirection="column">
-          <Button key="back" plain label="← Назад" onPress={go(to)}>
-            <Text dimColor>← Назад</Text>
+          <Button key="back" plain label={t.back} onPress={go(to)}>
+            <Text dimColor>{t.back}</Text>
           </Button>
           <Text> </Text>
         </Box>
@@ -217,13 +231,13 @@ export const register: Register = on => {
       // ---- entry page: what it is, why so much, what to do ----
       if (where.kind === 'entry') {
         const entry = snap.entries.find(x => x.id === where.id)
-        const help = helpFor(where.id)
+        const help = helpFor(where.id, snap.lang)
         const parent: Page = { kind: 'group', id: entry?.group ?? help.group }
         if (!entry)
           return (
             <Box flexDirection="column">
               {back(parent)}
-              <Text dimColor>Этого пункта сейчас нет в контексте.</Text>
+              <Text dimColor>{t.entryGone}</Text>
             </Box>
           )
         const average = entry.count ? Math.round(entry.tokens / entry.count) : 0
@@ -232,15 +246,15 @@ export const register: Register = on => {
             {back(parent)}
             {titleRow(entry.label, ofUsed(entry.tokens))}
             <Text> </Text>
-            <Text bold>Что это</Text>
+            <Text bold>{t.whatIs}</Text>
             <Box paddingLeft={2}>
               <Text>{help.what}</Text>
             </Box>
             <Text> </Text>
-            <Text bold>Почему столько</Text>
+            <Text bold>{t.whySoMuch}</Text>
             <Box paddingLeft={2} flexDirection="column">
-              <Text>{entry.count > 1 ? `${entry.count} раз, в среднем ${k(average)} за раз` : '1 раз'}</Text>
-              {entry.top.length > 0 && <Text dimColor>Самые тяжёлые:</Text>}
+              <Text>{entry.count > 1 ? t.times(entry.count, k(average)) : t.once}</Text>
+              {entry.top.length > 0 && <Text dimColor>{t.heaviest}</Text>}
               {entry.top.map(c => (
                 <Text wrap="truncate-end">
                   {`+${k(c.tokens)}`.padStart(7)}
@@ -250,9 +264,9 @@ export const register: Register = on => {
               ))}
             </Box>
             <Text> </Text>
-            <Text bold>Что делать</Text>
+            <Text bold>{t.whatToDo}</Text>
             <Box paddingLeft={2}>
-              <Text>{help.todo ?? 'Ничего: это постоянная часть работы Claude Code.'}</Text>
+              <Text>{help.todo ?? t.nothingToDo}</Text>
             </Box>
           </Box>
         )
@@ -268,10 +282,10 @@ export const register: Register = on => {
         return (
           <Box flexDirection="column">
             {back({ kind: 'home' })}
-            {titleRow(group.label, ofUsed(sum))}
+            {titleRow(groupLabel(group.id, snap.lang), ofUsed(sum))}
             <Text> </Text>
             {columnsHead}
-            {list.length === 0 && <Text dimColor>Здесь пока пусто.</Text>}
+            {list.length === 0 && <Text dimColor>{t.emptyGroup}</Text>}
             {list.map(x => {
               // Only the name is the button: the pointer inverts a button, and an inverted bar breaks.
               const name = x.label.slice(0, NAME - 1)
@@ -306,28 +320,28 @@ export const register: Register = on => {
       const week = limit(/seven_day/)
       const tiles = [
         {
-          title: 'КОНТЕКСТ',
+          title: t.tileContext,
           percent: fill,
           level: levelOf((total / snap.threshold) * 100, 50, 80),
-          lines: [`${k(total)} из ${k(snap.window)}`, turnsLeft !== null ? `хватит на ~${turnsLeft} ходов` : ''],
+          lines: [t.ofWindow(k(total), k(snap.window)), turnsLeft !== null ? t.turnsLeft(turnsLeft) : ''],
         },
         ...(five
           ? [
               {
-                title: 'ЛИМИТ 5 Ч',
+                title: t.tile5h,
                 percent: five.percentUsed,
                 level: levelOf(five.percentUsed, 70, 90),
-                lines: [five.resetsAt ? `сброс ${resetLabel(five.resetsAt, now)}` : '', ''],
+                lines: [five.resetsAt ? t.resets(resetLabel(five.resetsAt, now)) : '', ''],
               },
             ]
           : []),
         ...(week
           ? [
               {
-                title: 'ЛИМИТ НЕДЕЛЯ',
+                title: t.tileWeek,
                 percent: week.percentUsed,
                 level: levelOf(week.percentUsed, 70, 90),
-                lines: [week.resetsAt ? `сброс ${resetLabel(week.resetsAt, now)}` : '', ''],
+                lines: [week.resetsAt ? t.resets(resetLabel(week.resetsAt, now)) : '', ''],
               },
             ]
           : []),
@@ -337,13 +351,13 @@ export const register: Register = on => {
       const meterW = Math.max(6, colW - 2)
       const cell = (text: string, i: number) => text.padEnd(colW + (i < tiles.length - 1 ? gap : 0)).slice(0, colW + gap)
 
-      const groups = groupTotals(snap.entries)
+      const groups = groupTotals(snap.entries, snap.lang)
       const usedGroups = groups.filter(g => g.tokens > 0)
       const stack = widths(
         usedGroups.map(g => g.tokens),
         W - (usedGroups.length - 1),
       )
-      const hint = insight(snap.entries, fill, snap.used)
+      const hint = insight(snap.entries, fill, snap.used, snap.lang)
       const prices = snap.prices.slice(0, 6)
       const half = Math.ceil(prices.length / 2)
       const priceW = Math.floor((W - 4) / 2)
@@ -390,7 +404,7 @@ export const register: Register = on => {
           <Text> </Text>
 
           {/* what fills the window */}
-          {titleRow('Чем занят контекст', k(snap.used))}
+          {titleRow(t.whatFills, k(snap.used))}
           <Text>
             {usedGroups.map((g, i) => (
               <Text>
@@ -431,9 +445,9 @@ export const register: Register = on => {
           <Text> </Text>
 
           {/* what one action costs */}
-          <Text bold>СКОЛЬКО СТОИТ ДЕЙСТВИЕ</Text>
-          <Text dimColor>средняя цена одного раза: чем дешевле способ, тем дольше хватит контекста</Text>
-          {prices.length === 0 && <Text dimColor>Пока нет действий.</Text>}
+          <Text bold>{t.prices.toUpperCase()}</Text>
+          <Text dimColor>{t.pricesHint}</Text>
+          {prices.length === 0 && <Text dimColor>{t.noActions}</Text>}
           {Array.from({ length: half }, (_, row) => {
             const left = prices[row]
             const right = prices[row + half]
@@ -451,46 +465,49 @@ export const register: Register = on => {
           {/* the whole session, compactions included */}
           {session && session.requests > 0 && (
             <Box flexDirection="column">
-              {titleRow('За сессию', `с ${resetLabel(new Date(session.startedAt).toISOString(), now)}`)}
+              {titleRow(t.session, t.since(resetLabel(new Date(session.startedAt).toISOString(), now)))}
               <Text>
-                {'Прочитано моделью'.padEnd(NAME)}
+                {t.readByModel.padEnd(NAME)}
                 {k(session.read).padStart(NUM)}
                 <Text dimColor>
-                  {'  '}из кэша {session.read ? Math.round((session.cached / session.read) * 100) : 0}%
+                  {'  '}
+                  {t.fromCache(session.read ? Math.round((session.cached / session.read) * 100) : 0)}
                 </Text>
               </Text>
               <Text>
-                {'Написано мной'.padEnd(NAME)}
+                {t.written.padEnd(NAME)}
                 {k(session.written).padStart(NUM)}
               </Text>
               <Text>
-                {'Запросов к модели'.padEnd(NAME)}
+                {t.requests.padEnd(NAME)}
                 {String(session.requests).padStart(NUM)}
               </Text>
               <Text>
-                {'Компактов'.padEnd(NAME)}
+                {t.compacts.padEnd(NAME)}
                 {String(session.compacts.length).padStart(NUM)}
                 {session.compacts.length > 0 && (
                   <Text dimColor>
-                    {'  '}сбросили {k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0))}
+                    {'  '}
+                    {t.dropped(k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
                   </Text>
                 )}
               </Text>
-              <Text dimColor>каждый запрос заново читает весь контекст, кэш в разы дешевле</Text>
+              <Text dimColor>{t.sessionHint}</Text>
               <Text> </Text>
             </Box>
           )}
 
           {/* folded details */}
-          <Button key="block-dynamics" plain label="Как рос контекст" onPress={toggle('block:dynamics')}>
+          <Button key="block-dynamics" plain label={t.growth} onPress={toggle('block:dynamics')}>
             <Text>
-              <Text dimColor>{isOpen('block:dynamics') ? '▾ ' : '▸ '}</Text>Как рос контекст
+              <Text dimColor>{isOpen('block:dynamics') ? '▾ ' : '▸ '}</Text>
+              {t.growth}
             </Text>
           </Button>
           {isOpen('block:dynamics') && (
             <Box flexDirection="column" paddingLeft={2}>
               <Text dimColor>
-                в среднем +{k(Math.round(v.overall))} за ход, последние 5 ходов +{k(Math.round(v.recent))}
+                {t.pace(k(Math.round(v.overall)), k(Math.round(v.recent)))}
               </Text>
               {chartRows(
                 shown.map(p => p.tokens),
@@ -503,32 +520,33 @@ export const register: Register = on => {
               ))}
               <Text dimColor>
                 {'    0 '}
-                {shown.length > 1 ? `ход ${shown[0]!.turn} → ход ${shown[shown.length - 1]!.turn}` : ''}
+                {shown.length > 1 ? t.turnRange(shown[0]!.turn, shown[shown.length - 1]!.turn) : ''}
               </Text>
               {jumps(shown, 3).map(j => (
                 <Text wrap="truncate-end">
                   {`+${k(j.delta)}`.padStart(6)}
-                  <Text dimColor>{`  ход ${j.turn}  `}</Text>
-                  {j.cause ?? 'переписка'}
+                  <Text dimColor>{`  ${t.turn(j.turn)}  `}</Text>
+                  {j.cause ?? t.conversation}
                 </Text>
               ))}
               {(session?.compacts ?? []).map(c => (
                 <Text wrap="truncate-end">
                   {`−${k(Math.max(0, c.before - c.after))}`.padStart(6)}
-                  <Text dimColor>{`  ход ${c.turn}  `}</Text>
-                  компакт {COMPACT_TRIGGER[c.trigger] ?? ''}: {k(c.before)} → {k(c.after)}
+                  <Text dimColor>{`  ${t.turn(c.turn)}  `}</Text>
+                  {t.compactLine(c.trigger === 'manual' ? t.manual : c.trigger === 'auto' ? t.auto : t.plugin, k(c.before), k(c.after))}
                 </Text>
               ))}
             </Box>
           )}
-          <Button key="block-steps" plain label="Самые тяжёлые шаги" onPress={toggle('block:steps')}>
+          <Button key="block-steps" plain label={t.steps} onPress={toggle('block:steps')}>
             <Text>
-              <Text dimColor>{isOpen('block:steps') ? '▾ ' : '▸ '}</Text>Самые тяжёлые шаги
+              <Text dimColor>{isOpen('block:steps') ? '▾ ' : '▸ '}</Text>
+              {t.steps}
             </Text>
           </Button>
           {isOpen('block:steps') && (
             <Box flexDirection="column" paddingLeft={2}>
-              {steps.length === 0 && <Text dimColor>Пока нет шагов.</Text>}
+              {steps.length === 0 && <Text dimColor>{t.noSteps}</Text>}
               {steps.map(s => (
                 <Text wrap="truncate-end">
                   {`+${k(s.tokens)}`.padStart(6)}
@@ -544,7 +562,7 @@ export const register: Register = on => {
       const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
       $.ui.log(`chudarin-context: pane render failed: ${text}`)
       const { Text } = $.ui.resolve(e)
-      return <Text color="error">chudarin-context: отрисовка упала: {text}</Text>
+      return <Text color="error">chudarin-context: {text}</Text>
     }
   })
 }

@@ -2,6 +2,7 @@
 import type { Category, Item } from '../types'
 
 import { type GroupId, helpFor } from './help'
+import { type Lang, type Strings, UI } from './i18n'
 import { IMAGE_TOKENS, type Message, k, kind, label } from './model'
 
 export type Call = { label: string; tokens: number }
@@ -12,12 +13,17 @@ export type Price = { name: string; count: number; average: number }
 // Fixed order: a group keeps its color whatever its size. Dark-surface categorical slots
 // (blue, orange, aqua, violet), checked with the dataviz validator against #282828:
 // adjacent CVD ΔE >= 9.4, normal-vision ΔE >= 24.6. Yellow is skipped: it means "warning" here.
-export const GROUPS: readonly { id: GroupId; label: string; color: string }[] = [
-  { id: 'tools', label: 'Работа инструментов', color: '#3987e5' },
-  { id: 'service', label: 'Служебное Claude Code', color: '#d95926' },
-  { id: 'chat', label: 'Наш разговор', color: '#199e70' },
-  { id: 'rules', label: 'Скиллы и правила', color: '#9085e9' },
+export const GROUPS: readonly { id: GroupId; text: keyof Strings; color: string }[] = [
+  { id: 'tools', text: 'groupTools', color: '#3987e5' },
+  { id: 'service', text: 'groupService', color: '#d95926' },
+  { id: 'chat', text: 'groupChat', color: '#199e70' },
+  { id: 'rules', text: 'groupRules', color: '#9085e9' },
 ]
+
+export function groupLabel(id: GroupId, lang: Lang): string {
+  const g = GROUPS.find(x => x.id === id) ?? GROUPS[0]!
+  return UI[lang][g.text] as string
+}
 
 const TOP_CALLS = 5
 const CODE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit'])
@@ -69,7 +75,7 @@ function pieces(messages: readonly Message[]): Piece[] {
         const call = typeof b.tool_use_id === 'string' ? calls.get(b.tool_use_id) : undefined
         const { chars, images } = textOf(b.content)
         // A Skill call answers with one line; its body arrives as its own row below.
-        const id = call?.name === 'Skill' ? 'args' : `result:${kind(call?.name ?? 'инструмента')}`
+        const id = call?.name === 'Skill' ? 'args' : `result:${kind(call?.name ?? 'tool')}`
         out.push({
           id,
           tokens: chars / 4,
@@ -83,7 +89,7 @@ function pieces(messages: readonly Message[]): Piece[] {
         const text = b.text.trimStart()
         const skill = SKILL_BODY.exec(text)
         if (skill) {
-          const name = skill[1]!.split('/').filter(Boolean).pop() ?? 'скилл'
+          const name = skill[1]!.split('/').filter(Boolean).pop() ?? 'skill'
           out.push({ id: 'skills-loaded', tokens: text.length / 4, call: name, action: 'skill', callId: null })
         } else if (text.startsWith('<system-reminder>')) {
           out.push({ id: 'reminders', tokens: text.length / 4, call: null, action: null, callId: null })
@@ -103,12 +109,13 @@ export function buildEntries(
   categories: readonly Category[],
   details: Record<string, Item[]>,
   messages: readonly Message[],
+  lang: Lang,
 ): Entry[] {
   const entries: Entry[] = []
   for (const c of categories) {
     if (c.isFree || /^messages/i.test(c.name) || c.tokens <= 0) continue
     const id = `cat:${c.name}`
-    const help = helpFor(id)
+    const help = helpFor(id, lang)
     const list = details[c.name] ?? []
     entries.push({
       id,
@@ -135,7 +142,7 @@ export function buildEntries(
   for (const [id, s] of sums) {
     const tokens = Math.round(s.tokens * scale)
     if (tokens <= 0) continue
-    const help = helpFor(id)
+    const help = helpFor(id, lang)
     entries.push({
       id,
       label: help.label,
@@ -151,34 +158,40 @@ export function buildEntries(
   return entries.sort((a, b) => b.tokens - a.tokens)
 }
 
-export function groupTotals(entries: readonly Entry[]): GroupTotal[] {
-  return GROUPS.map(g => ({ ...g, tokens: entries.filter(e => e.group === g.id).reduce((n, e) => n + e.tokens, 0) }))
+export function groupTotals(entries: readonly Entry[], lang: Lang): GroupTotal[] {
+  return GROUPS.map(g => ({
+    id: g.id,
+    label: groupLabel(g.id, lang),
+    color: g.color,
+    tokens: entries.filter(e => e.group === g.id).reduce((n, e) => n + e.tokens, 0),
+  }))
 }
 
-const ACTION_NAMES: Record<string, string> = {
-  Write: 'Записать файл',
-  Edit: 'Правка файла',
-  MultiEdit: 'Правка файла',
-  NotebookEdit: 'Правка ноутбука',
-  Read: 'Прочитать файл',
-  Bash: 'Команда в Bash',
-  WebSearch: 'Поиск в вебе',
-  WebFetch: 'Загрузить страницу',
-  Grep: 'Поиск по файлам',
-  Glob: 'Поиск по файлам',
-  Agent: 'Субагент',
-  image: 'Скриншот',
-  skill: 'Скилл',
+const ACTION_TEXT: Record<string, keyof Strings> = {
+  Write: 'actWrite',
+  Edit: 'actEdit',
+  MultiEdit: 'actEdit',
+  NotebookEdit: 'actNotebook',
+  Read: 'actRead',
+  Bash: 'actBash',
+  WebSearch: 'actWebSearch',
+  WebFetch: 'actWebFetch',
+  Grep: 'actSearch',
+  Glob: 'actSearch',
+  Agent: 'actAgent',
+  image: 'actImage',
+  skill: 'actSkill',
 }
 
-function actionName(action: string): string | null {
+function actionName(action: string, lang: Lang): string | null {
   if (action === 'Skill' || action === 'AskUserQuestion' || action === 'ToolSearch') return null
   if (action.startsWith('mcp__')) return `MCP ${action.split('__')[1]}`
-  return ACTION_NAMES[action] ?? action
+  const text = ACTION_TEXT[action]
+  return text ? (UI[lang][text] as string) : action
 }
 
 // Average price of one action: what I sent plus what came back, in estimated tokens.
-export function actionPrices(messages: readonly Message[]): Price[] {
+export function actionPrices(messages: readonly Message[], lang: Lang): Price[] {
   const perCall = new Map<string, { action: string; tokens: number }>()
   const single: { action: string; tokens: number }[] = []
   for (const p of pieces(messages)) {
@@ -193,7 +206,7 @@ export function actionPrices(messages: readonly Message[]): Price[] {
   }
   const sums = new Map<string, { count: number; tokens: number }>()
   for (const { action, tokens } of [...perCall.values(), ...single]) {
-    const name = actionName(action)
+    const name = actionName(action, lang)
     if (!name) continue
     const s = sums.get(name) ?? { count: 0, tokens: 0 }
     sums.set(name, { count: s.count + 1, tokens: s.tokens + tokens })
@@ -205,10 +218,10 @@ export function actionPrices(messages: readonly Message[]): Price[] {
 }
 
 // One line worth acting on, or nothing.
-export function insight(entries: readonly Entry[], fill: number, used: number): string | null {
-  if (fill > 50) return `Контекст заполнен на ${Math.round(fill)}%. Если задача сменилась: /compact или новая сессия.`
+export function insight(entries: readonly Entry[], fill: number, used: number, lang: Lang): string | null {
+  if (fill > 50) return UI[lang].fillInsight(Math.round(fill))
   for (const e of entries) {
-    const help = helpFor(e.id)
+    const help = helpFor(e.id, lang)
     if (!help.todo) continue
     if (used > 0 && e.tokens / used > 0.1) return `${e.label} ${help.took} ${k(e.tokens)}. ${help.todo}`
     return null

@@ -47,42 +47,48 @@ for (const surface of ['terminal', 'desktop'] as const) {
       requestId: 'chudarin-context',
       props: props as never,
     })
-    expect(JSON.stringify(await ui.drawn())).toContain('Нет данных')
+    expect(JSON.stringify(await ui.drawn())).toContain('No data')
   })
 
-  test(`home → group → entry → back on ${surface}`, async ($, on) => {
-    on('session.usage', () => ({ value: usage }) as never)
-    on('session.messages', () => ({ value: messages }) as never)
-    on('session.measure', (_$, e) => ({ changed: e.changed }))
-    on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
-    on('session.id', () => ({ value: 'test-session' }) as never)
-    await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
-    const ui = await $.ui.mount({
-      plugin: 'chudarin-context',
-      surface,
-      component: 'Pane',
-      requestId: 'chudarin-context',
-      props: props as never,
+  for (const [language, w] of [
+    ['Russian', { week: 'ЛИМИТ НЕДЕЛЯ', group: 'Работа инструментов', price: 'Команда в Bash', entry: 'Вывод команд Bash', what: 'Что это', todo: 'Что делать', groupTitle: 'РАБОТА ИНСТРУМЕНТОВ', home: 'ЧЕМ ЗАНЯТ КОНТЕКСТ' }],
+    ['English', { week: 'WEEKLY LIMIT', group: 'Tool work', price: 'Bash command', entry: 'Bash output', what: 'What it is', todo: 'What to do', groupTitle: 'TOOL WORK', home: 'WHAT FILLS THE CONTEXT' }],
+  ] as const) {
+    test(`home → group → entry → back on ${surface} in ${language}`, async ($, on) => {
+      on('session.usage', () => ({ value: usage }) as never)
+      on('session.messages', () => ({ value: messages }) as never)
+      on('session.measure', (_$, e) => ({ changed: e.changed }))
+      on('settings.read', () => ({ value: { language } }) as never)
+      on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+      on('session.id', () => ({ value: 'test-session' }) as never)
+      await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+      const ui = await $.ui.mount({
+        plugin: 'chudarin-context',
+        surface,
+        component: 'Pane',
+        requestId: 'chudarin-context',
+        props: props as never,
+      })
+      const drawn = async () => JSON.stringify(await ui.drawn())
+
+      const home = await drawn()
+      expect(home).toContain(w.week)
+      expect(home).toContain(w.group)
+      expect(home).toContain(w.price)
+
+      await ui.press({ key: 'group-tools' })
+      expect(await drawn()).toContain(w.entry)
+
+      await ui.press({ key: 'entry-result:Bash' })
+      const entry = await drawn()
+      expect(entry).toContain(w.what)
+      expect(entry).toContain(w.todo)
+      expect(entry).toContain('npm test')
+
+      await ui.press({ key: 'back' })
+      expect(await drawn()).toContain(w.groupTitle)
+      await ui.press({ key: 'back' })
+      expect(await drawn()).toContain(w.home)
     })
-    const drawn = async () => JSON.stringify(await ui.drawn())
-
-    const home = await drawn()
-    expect(home).toContain('ЛИМИТ НЕДЕЛЯ')
-    expect(home).toContain('Работа инструментов')
-    expect(home).toContain('Команда в Bash')
-
-    await ui.press({ key: 'group-tools' })
-    expect(await drawn()).toContain('Вывод команд Bash')
-
-    await ui.press({ key: 'entry-result:Bash' })
-    const entry = await drawn()
-    expect(entry).toContain('Что это')
-    expect(entry).toContain('Что делать')
-    expect(entry).toContain('npm test')
-
-    await ui.press({ key: 'back' })
-    expect(await drawn()).toContain('РАБОТА ИНСТРУМЕНТОВ')
-    await ui.press({ key: 'back' })
-    expect(await drawn()).toContain('ЧЕМ ЗАНЯТ КОНТЕКСТ')
-  })
+  }
 }
