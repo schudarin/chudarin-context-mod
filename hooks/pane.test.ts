@@ -55,6 +55,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('session.messages', () => ({ value: messages }) as never)
     on('session.measure', (_$, e) => ({ changed: e.changed }))
     on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+    on('session.id', () => ({ value: 'test-session' }) as never)
     await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
     const ui = await $.ui.mount({
       plugin: 'chudarin-context',

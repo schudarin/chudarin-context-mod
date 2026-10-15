@@ -2,6 +2,19 @@ export type Step = { label: string; tokens: number }
 export type Category = { name: string; tokens: number; color: string; isFree: boolean }
 export type Item = { name: string; tokens: number }
 export type Point = { tokens: number; turn: number; cause: string | null }
+export type Compact = { turn: number; trigger: string; before: number; after: number }
+
+// One session's running totals, kept in $.store under `session:<id>`.
+export type SessionLog = {
+  startedAt: number
+  requests: number
+  // Everything the model read across requests: fresh, cached and newly cached input.
+  read: number
+  cached: number
+  written: number
+  points: Point[]
+  compacts: Compact[]
+}
 
 export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
 
@@ -28,7 +41,7 @@ export type Page = { kind: 'home' } | { kind: 'group'; id: string } | { kind: 'e
 declare module 'claude-code' {
   interface PluginState {
     'chudarin-context': {
-      trail: Point[]
+      log: SessionLog | null
       heaviest: Step | null
       top: Step[]
       snapshot: Snapshot | null

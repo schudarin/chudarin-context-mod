@@ -8,6 +8,7 @@ Claude Code mod: side panel `/ctx` with context usage, limits, action prices and
 - `hooks/entries.ts` — groups, entries, action prices, insight.
 - `hooks/help.ts` — plain-language names and help per entry.
 - `hooks/model.ts` — formatting, chart, verdict maths.
+- `hooks/history.ts` — session log (tokens read/written per request, context per turn, compactions), kept in `$.store` under `session:<id>`, last 30 sessions.
 - `types/index.d.ts` — `$.state` contract.
 - `docs/spec.md` — current spec (v3).
 

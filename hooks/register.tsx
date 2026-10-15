@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Page, Snapshot, Step } from '../types'
+import type { Page, SessionLog, Snapshot, Step } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupTotals, insight } from './entries'
 import { helpFor } from './help'
+import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
 import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, windowRows } from './model'
 
-const trail = atom({ plugin: 'chudarin-context', key: 'trail' } as const, [])
+const log = atom({ plugin: 'chudarin-context', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context', key: 'heaviest' } as const, null)
 const top = atom({ plugin: 'chudarin-context', key: 'top' } as const, [])
 const snapshot = atom({ plugin: 'chudarin-context', key: 'snapshot' } as const, null)
@@ -15,13 +16,15 @@ const page = atom({ plugin: 'chudarin-context', key: 'page' } as const, { kind: 
 const bandOn = atom({ plugin: 'chudarin-context', key: 'bandOn' } as const, false)
 
 const PANE = 'chudarin-context'
-const MAX_POINTS = 200
+// Session logs kept in the store; older ones are dropped.
+const KEEP_SESSIONS = 30
 const BAND_POINTS = 24
 const CHART_ROWS = 6
 const TOP_STEPS = 8
 // Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
 const BLOCK = '▆'
 const EMPTY = '·'
+const COMPACT_TRIGGER: Record<string, string> = { manual: 'вручную', auto: 'автоматически', plugin: 'плагином' }
 
 type Level = 'ok' | 'warn' | 'bad'
 const LEVEL_COLOR: Record<Level, 'success' | 'warning' | 'error'> = { ok: 'success', warn: 'warning', bad: 'error' }
@@ -42,6 +45,15 @@ function widths(values: readonly number[], width: number): number[] {
     extra -= 1
   }
   return out
+}
+
+// Change the session log in the panel's state and persist it, so a restart or --resume keeps it.
+async function saveLog($: EngineInterface, change: (l: SessionLog) => SessionLog) {
+  const id = await $.session.id()
+  const now = await $.clock.now()
+  let next: SessionLog | null = null
+  await update($, log, prev => (next = change(prev ?? emptyLog(now))))
+  if (next) await $.store.set(sessionKey(id), next)
 }
 
 async function refresh($: EngineInterface) {
@@ -67,11 +79,16 @@ export const register: Register = on => {
     const r = await next(e)
     await $.command.register({ name: 'ctx', description: 'Панель: что съедает контекст' })
     await $.command.register({ name: 'ctx-line', description: 'Строка контекста над полем ввода: вкл/выкл' })
-    // Seed right away instead of waiting for the first turn to end.
+    // Pick up this session's log (after a restart or --resume), or start one.
+    const id = await $.session.id()
+    const stored = (await $.store.get(sessionKey(id))) as SessionLog | undefined
+    const now = await $.clock.now()
+    await update($, log, () => stored ?? emptyLog(now))
+    for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
     const { context } = await $.session.usage()
-    if (context.tokens !== undefined) {
+    if (context.tokens !== undefined && !stored?.points.length) {
       const tokens = context.tokens
-      await update($, trail, prev => (prev.length ? prev : [{ tokens, turn: 1, cause: null }]))
+      await saveLog($, l => addPoint(l, tokens, null))
     }
     await refresh($)
     return r
@@ -109,15 +126,31 @@ export const register: Register = on => {
     return r
   }).catch(($, e, next) => next(e))
 
+  // Every model request of the main conversation: what it read and wrote.
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e)
+    const usage = r?.usage
+    if (!e.agentId && usage) await saveLog($, l => addRequest(l, usage))
+    return r
+  })
+
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    const isMain = !e.agentId && e.trigger !== 'precompute'
+    if (isMain && r.skip === undefined) {
+      const { tokensBefore, tokensAfter } = r
+      if (tokensBefore !== undefined && tokensAfter !== undefined)
+        await saveLog($, l => addCompact(l, e.trigger, tokensBefore, tokensAfter))
+    }
+    return r
+  }).catch(($, e, next) => next(e))
+
   on('session.measure', async ($, e, next) => {
     const tokens = e.context.tokens
     if (tokens !== undefined) {
       const cause = (await read($, heaviest))?.label ?? null
-      await update($, trail, prev => {
-        const last = prev[prev.length - 1]
-        if (last?.tokens === tokens) return prev
-        return [...prev, { tokens, turn: (last?.turn ?? 0) + 1, cause }].slice(-MAX_POINTS)
-      })
+      // The log is a nice-to-have: a failure here must not stop the panel's refresh.
+      await saveLog($, l => addPoint(l, tokens, cause)).catch(err => $.ui.log(`chudarin-context: log not saved: ${String(err)}`))
     }
     await refresh($)
     return next(e)
@@ -125,7 +158,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || !(await read($, bandOn))) return next(e)
-    const points = (await read($, trail)).slice(-BAND_POINTS).map(p => p.tokens)
+    const points = ((await read($, log))?.points ?? []).slice(-BAND_POINTS).map(p => p.tokens)
     const total = points[points.length - 1]
     const snap = await read($, snapshot)
     if (total === undefined || !snap) return next(e)
@@ -147,7 +180,8 @@ export const register: Register = on => {
       const snap = await read($, snapshot)
       if (!snap) return <Text dimColor>Нет данных до первого ответа.</Text>
 
-      const points = await read($, trail)
+      const session = await read($, log)
+      const points = session?.points ?? []
       const steps = await read($, top)
       const open = await read($, expanded)
       const where = await read($, page)
@@ -414,6 +448,39 @@ export const register: Register = on => {
           })}
           <Text> </Text>
 
+          {/* the whole session, compactions included */}
+          {session && session.requests > 0 && (
+            <Box flexDirection="column">
+              {titleRow('За сессию', `с ${resetLabel(new Date(session.startedAt).toISOString(), now)}`)}
+              <Text>
+                {'Прочитано моделью'.padEnd(NAME)}
+                {k(session.read).padStart(NUM)}
+                <Text dimColor>
+                  {'  '}из кэша {session.read ? Math.round((session.cached / session.read) * 100) : 0}%
+                </Text>
+              </Text>
+              <Text>
+                {'Написано мной'.padEnd(NAME)}
+                {k(session.written).padStart(NUM)}
+              </Text>
+              <Text>
+                {'Запросов к модели'.padEnd(NAME)}
+                {String(session.requests).padStart(NUM)}
+              </Text>
+              <Text>
+                {'Компактов'.padEnd(NAME)}
+                {String(session.compacts.length).padStart(NUM)}
+                {session.compacts.length > 0 && (
+                  <Text dimColor>
+                    {'  '}сбросили {k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0))}
+                  </Text>
+                )}
+              </Text>
+              <Text dimColor>каждый запрос заново читает весь контекст, кэш в разы дешевле</Text>
+              <Text> </Text>
+            </Box>
+          )}
+
           {/* folded details */}
           <Button key="block-dynamics" plain label="Как рос контекст" onPress={toggle('block:dynamics')}>
             <Text>
@@ -443,6 +510,13 @@ export const register: Register = on => {
                   {`+${k(j.delta)}`.padStart(6)}
                   <Text dimColor>{`  ход ${j.turn}  `}</Text>
                   {j.cause ?? 'переписка'}
+                </Text>
+              ))}
+              {(session?.compacts ?? []).map(c => (
+                <Text wrap="truncate-end">
+                  {`−${k(Math.max(0, c.before - c.after))}`.padStart(6)}
+                  <Text dimColor>{`  ход ${c.turn}  `}</Text>
+                  компакт {COMPACT_TRIGGER[c.trigger] ?? ''}: {k(c.before)} → {k(c.after)}
                 </Text>
               ))}
             </Box>
