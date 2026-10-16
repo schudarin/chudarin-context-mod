@@ -31,10 +31,10 @@ export function addRequest(log: SessionLog, u: Usage): SessionLog {
 }
 
 // The context size after a turn, with the heaviest step of that turn as its likely cause.
-export function addPoint(log: SessionLog, tokens: number, cause: string | null): SessionLog {
+export function addPoint(log: SessionLog, tokens: number, cause: string | null, detail: string | null = null): SessionLog {
   const last = log.points[log.points.length - 1]
   if (last?.tokens === tokens) return log
-  const point = { tokens, turn: (last?.turn ?? 0) + 1, cause }
+  const point = { tokens, turn: (last?.turn ?? 0) + 1, cause, detail }
   return { ...log, points: [...log.points, point].slice(-MAX_POINTS) }
 }
 

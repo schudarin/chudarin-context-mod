@@ -1,13 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, detailsFor, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, sparkline, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { chartRows, detail, detailsFor, fitCell, nameWidth, priceGrid, wrapLines, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
-
-test('sparkline rises with growth', () => {
-  expect(sparkline([10, 20, 30])).toBe('▁▅█')
-  expect(sparkline([])).toBe('')
-})
 
 test('k formats tokens', () => {
   expect(k(56_100)).toBe('56k')
@@ -100,8 +95,8 @@ test('jumps lists the biggest rises with their turn and cause', () => {
       2,
     ),
   ).toEqual([
-    { delta: 30, turn: 2, cause: 'Read a.md' },
-    { delta: 20, turn: 5, cause: 'Bash x' },
+    { delta: 30, turn: 2, cause: 'Read a.md', detail: null },
+    { delta: 20, turn: 5, cause: 'Bash x', detail: null },
   ])
 })
 
@@ -166,4 +161,35 @@ test('limitForecast extrapolates the last hour', () => {
 test('turnRises gives what each turn added; a compaction adds nothing', () => {
   expect(turnRises([pt(10_000, 1), pt(12_000, 2), pt(50_000, 3), pt(5_000, 4), pt(6_000, 5)])).toEqual([2_000, 38_000, 0, 1_000])
   expect(turnRises([pt(10_000, 1)])).toEqual([])
+})
+
+test('detail keeps the whole call: description, full command, full path', () => {
+  expect(detail({ tool: 'Bash', command: 'npm test -- --watch=false', description: 'Run tests' })).toBe(
+    'Bash Run tests: npm test -- --watch=false',
+  )
+  expect(detail({ tool: 'Read', file_path: '/a/b/App.tsx' })).toBe('Read /a/b/App.tsx')
+  expect(detail({ tool: 'Bash', command: 'x'.repeat(1000) }).length).toBeLessThanOrEqual(400)
+})
+
+test('wrapLines breaks text on spaces to fit a width, and splits a word longer than the line', () => {
+  expect(wrapLines('npm run build -- --filter pkg', 12)).toEqual(['npm run', 'build --', '--filter pkg'])
+  expect(wrapLines('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+  expect(wrapLines('short', 20)).toEqual(['short'])
+})
+
+test('fitCell gives exactly the width: padded, or cut with an ellipsis', () => {
+  expect(fitCell('сброс 19:30', 14)).toBe('сброс 19:30   ')
+  expect(fitCell('хватит на ~328 ходов', 14)).toBe('хватит на ~32…')
+})
+
+test('priceGrid: one column when narrow, two capped columns when wide', () => {
+  expect(priceGrid(36)).toEqual({ columns: 1, width: 36 })
+  expect(priceGrid(64)).toEqual({ columns: 2, width: 30 })
+  expect(priceGrid(170)).toEqual({ columns: 2, width: 36 })
+})
+
+test('nameWidth leaves room for the numbers, between 12 and 30', () => {
+  expect(nameWidth(100)).toBe(30)
+  expect(nameWidth(36)).toBe(19)
+  expect(nameWidth(20)).toBe(12)
 })

@@ -38,7 +38,7 @@ From top to bottom:
   took 61k. Ask Claude to run tests and go through long logs in a subagent: only the summary comes
   back." "Put in chat" puts a ready request or command in the prompt box; you send it yourself.
   "Hide" hides it for the session; the item page also has "Don't show again". Most of the advice comes from Anthropic's [guide to reducing token usage](https://code.claude.com/docs/en/costs#reduce-token-usage).
-- **What an action costs.** The average price of one screenshot, one file written, one Bash command,
+- **Action costs.** The average price of one screenshot, one file written, one Bash command,
   one skill. This is the part that teaches: you see which habits are expensive.
 - **This session.** How long it has run and how many messages you sent, how much of the 5-hour and
   weekly limits it used, what one message costs on average, and the compactions. A long session
@@ -74,7 +74,6 @@ don't have to install it, the two are separate. Restart Claude Code after instal
 | Command | What it does |
 |---|---|
 | `/ctx` | Opens the panel. Again, or Esc while the panel has focus, closes it |
-| `/ctx-line` | Turns on a one-line summary above the prompt. Off by default |
 
 Click a row to open it, `← Back` to return. If clicks don't land, focus the panel first:
 click it or press `ctrl+x tab`.

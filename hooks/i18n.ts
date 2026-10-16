@@ -35,11 +35,8 @@ export function langOf(setting: unknown): Lang {
 
 const ru = {
   cmdPanel: 'Панель: что съедает контекст',
-  cmdLine: 'Строка контекста над полем ввода: вкл/выкл',
   panelClosed: 'Панель контекста закрыта.',
   panelOpened: 'Панель открыта. Esc или /ctx закрывает.',
-  lineOn: 'Строка контекста включена.',
-  lineOff: 'Строка контекста выключена.',
   paneTitle: 'Контекст',
   noData: 'Нет данных до первого ответа.',
   renderFailed: 'отрисовка упала',
@@ -79,8 +76,7 @@ const ru = {
   stale: (at: string) => `Данные устарели, последнее обновление в ${at}`,
   refresh: 'Обновить',
   whatFills: 'Чем занят контекст',
-  prices: 'Сколько стоит действие',
-  pricesHint: 'чем дешевле способ, тем дольше хватит контекста',
+  prices: 'Стоимость действий',
   noActions: 'Пока нет действий.',
   session: 'За сессию',
   since: (at: string) => `с ${at}`,
@@ -117,11 +113,8 @@ const ru = {
 
 const en: typeof ru = {
   cmdPanel: 'Panel: what fills your context',
-  cmdLine: 'Context line above the prompt: on/off',
   panelClosed: 'Context panel closed.',
   panelOpened: 'Panel open. Esc or /ctx closes it.',
-  lineOn: 'Context line on.',
-  lineOff: 'Context line off.',
   paneTitle: 'Context',
   noData: 'No data until the first reply.',
   renderFailed: 'drawing failed',
@@ -159,8 +152,7 @@ const en: typeof ru = {
   stale: at => `Data is stale, last updated at ${at}`,
   refresh: 'Refresh',
   whatFills: 'What fills the context',
-  prices: 'What an action costs',
-  pricesHint: 'the cheaper the way, the longer the context lasts',
+  prices: 'Action costs',
   noActions: 'No actions yet.',
   session: 'This session',
   since: at => `since ${at}`,

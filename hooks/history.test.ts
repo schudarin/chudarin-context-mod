@@ -63,3 +63,8 @@ test('addLimit adds up what the session spent, across a reset', () => {
   l = addLimit(l, 'five_hour', 'r2', 6)
   expect(l.limits.five_hour).toEqual({ resetsAt: 'r2', last: 6, spent: 21 })
 })
+
+test('addPoint keeps the full text of the cause', () => {
+  const l = addPoint(emptyLog(0), 10_000, 'Bash npm test', 'Bash Run tests: npm test -- --watch=false')
+  expect(l.points[0]!.detail).toBe('Bash Run tests: npm test -- --watch=false')
+})

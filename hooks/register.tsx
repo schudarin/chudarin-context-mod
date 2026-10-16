@@ -6,14 +6,13 @@ import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } 
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, detailsFor, jumps, k, label, limitForecast, pace, resetLabel, sparkline, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { chartRows, detail, detailsFor, fitCell, nameWidth, priceGrid, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
 const snapshot = atom({ plugin: 'chudarin-context-mod', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'chudarin-context-mod', key: 'expanded' } as const, [])
 const page = atom({ plugin: 'chudarin-context-mod', key: 'page' } as const, { kind: 'home' } as Page)
-const bandOn = atom({ plugin: 'chudarin-context-mod', key: 'bandOn' } as const, false)
 const lang = atom({ plugin: 'chudarin-context-mod', key: 'lang' } as const, 'en' as Lang)
 const usual = atom({ plugin: 'chudarin-context-mod', key: 'usual' } as const, null)
 const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, [])
@@ -59,7 +58,6 @@ const PANE = 'chudarin-context-mod'
 const STALE_MS = 5 * 60_000
 // Session logs kept in the store; older ones are dropped.
 const KEEP_SESSIONS = 30
-const BAND_POINTS = 24
 const CHART_ROWS = 6
 // Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
 const BLOCK = '▆'
@@ -137,7 +135,6 @@ export const register: Register = on => {
     const r = await next(e)
     const t0 = UI[await readLang($)]
     await $.command.register({ name: 'ctx', description: t0.cmdPanel })
-    await $.command.register({ name: 'ctx-line', description: t0.cmdLine })
     // Pick up this session's log (after a restart or --resume), or start one.
     const id = await $.session.id()
     const stored = (await $.store.get(sessionKey(id))) as SessionLog | undefined
@@ -197,13 +194,6 @@ export const register: Register = on => {
     return { text: t.panelOpened }
   })
 
-  on('command.run', { command: 'ctx-line' }, async $ => {
-    const t = UI[await read($, lang)]
-    const isOn = !(await read($, bandOn))
-    await update($, bandOn, () => isOn)
-    return { text: isOn ? t.lineOn : t.lineOff }
-  })
-
   on('prompt.submit', async ($, e, next) => {
     await update($, heaviest, () => null)
     await markDone($, p => !p.startsWith('/') && e.text.includes(p))
@@ -215,7 +205,7 @@ export const register: Register = on => {
     const r = await next(e)
     // Rough estimate: ~4 characters per token.
     const tokens = Math.round((r.text?.length ?? 0) / 4)
-    const step: Step = { label: label(e as Record<string, unknown>), tokens }
+    const step: Step = { label: label(e as Record<string, unknown>), tokens, detail: detail(e as Record<string, unknown>) }
     await update($, heaviest, prev => (prev && prev.tokens >= tokens ? prev : step))
     return r
   }).catch(($, e, next) => next(e))
@@ -242,53 +232,46 @@ export const register: Register = on => {
   on('session.measure', async ($, e, next) => {
     const tokens = e.context.tokens
     if (tokens !== undefined) {
-      const cause = (await read($, heaviest))?.label ?? null
+      const step = await read($, heaviest)
+      const cause = step?.label ?? null
       // The log is a nice-to-have: a failure here must not stop the panel's refresh.
-      await saveLog($, l => addPoint(l, tokens, cause)).catch(err => $.ui.log(`chudarin-context-mod: log not saved: ${String(err)}`))
+      await saveLog($, l => addPoint(l, tokens, cause, step?.detail ?? null)).catch(err => $.ui.log(`chudarin-context-mod: log not saved: ${String(err)}`))
     }
     await refresh($)
     return next(e)
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || !(await read($, bandOn))) return next(e)
-    const points = ((await read($, log))?.points ?? []).slice(-BAND_POINTS).map(p => p.tokens)
-    const total = points[points.length - 1]
-    const snap = await read($, snapshot)
-    if (total === undefined || !snap) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    return (
-      <Box>
-        <Text dimColor>
-          ctx {UI[snap.lang].ofWindow(k(total), k(snap.window))} · {Math.round((total / snap.window) * 100)}%{' '}
-          <Text color="suggestion">{sparkline(points)}</Text>
-          {'  /ctx'}
-        </Text>
-      </Box>
-    )
-  })
-
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
       const { Box, Button, Text } = $.ui.resolve(e)
-      const snap = await read($, snapshot)
-      const t = UI[await read($, lang)]
+      // Every read at once: one wait per redraw instead of thirteen in a row (a resize redraws
+      // on each step). Reading `minute` subscribes the pane to the minute clock.
+      const [snap, language, session, open, where, , now, mutedIds, done, hiddenIds, track, usualPace] = await Promise.all([
+        read($, snapshot),
+        read($, lang),
+        read($, log),
+        read($, expanded),
+        read($, page),
+        read($, minute),
+        $.clock.now(),
+        read($, muted),
+        read($, sent),
+        read($, hidden),
+        read($, limitTrack),
+        read($, usual),
+      ])
+      const t = UI[language]
       if (!snap) return <Text dimColor>{t.noData}</Text>
 
-      const session = await read($, log)
       const points = session?.points ?? []
       const fiveSpent = session?.limits?.five_hour?.spent ?? null
       const weekSpent = session?.limits?.seven_day?.spent ?? null
-      const open = await read($, expanded)
-      const where = await read($, page)
-      // Subscribes the pane to the minute clock: each tick redraws it.
-      await read($, minute)
-      const now = await $.clock.now()
       // Two empty columns on each side of every page; the grid fits inside them.
       const PAD = 2
-      const W = Math.max(40, e.props.bodyColumns - 2 * PAD)
+      // The real width, however narrow: content wider than the pane wraps and breaks the grid.
+      const W = Math.max(16, e.props.bodyColumns - 2 * PAD)
       // One grid for every list: name, tokens, share, then a bar or a chevron.
-      const NAME = 30
+      const NAME = nameWidth(W)
       const NUM = 7
       const PCT = 6
       // An empty row where column labels used to be: keeps the rhythm without the words.
@@ -333,15 +316,12 @@ export const register: Register = on => {
         await update($, muted, change)
         await $.store.set(MUTED, await read($, muted)).catch(err => $.ui.log(`chudarin-context-mod: hidden advice not saved: ${String(err)}`))
       }
-      const mutedIds = await read($, muted)
       // Adds the request after whatever the person has typed. The hint stays until it is sent.
       const putInChat = (h: { id: string; prompt: string | null }) => async () => {
         if (!h.prompt) return
         const draft = (await $.prompt.read()).text
         await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
       }
-      const done = await read($, sent)
-      const hiddenIds = await read($, hidden)
       // Muted for good, sent to Claude this session, hidden by the person this session, or shown.
       const stateOf = (id: string) =>
         mutedIds.includes(id) ? 'muted' : done.includes(id) ? 'sent' : hiddenIds.includes(id) ? 'hidden' : 'shown'
@@ -472,7 +452,6 @@ export const register: Register = on => {
       const limitLine = (l: { resetsAt?: string | null; passed: boolean }) =>
         !l.resetsAt ? '' : l.passed ? t.wasReset(resetLabel(l.resetsAt, now)) : t.resets(resetLabel(l.resetsAt, now))
       const five = limit(/five_hour/)
-      const track = await read($, limitTrack)
       const forecast =
         five?.resetsAt && !five.passed && track?.resetsAt === five.resetsAt
           ? limitForecast(track, now, Date.parse(five.resetsAt))
@@ -510,7 +489,8 @@ export const register: Register = on => {
       const gap = 2
       const colW = Math.floor((W - gap * (tiles.length - 1)) / tiles.length)
       const meterW = Math.max(6, colW - 2)
-      const cell = (text: string, i: number) => text.padEnd(colW + (i < tiles.length - 1 ? gap : 0)).slice(0, colW + gap)
+      // Each tile's text is cut to its column; the gap between columns always stays.
+      const cell = (text: string, i: number) => fitCell(text, colW) + (i < tiles.length - 1 ? ' '.repeat(gap) : '')
 
       const groups = groupTotals(snap.entries, snap.lang)
       const usedGroups = groups.filter(g => g.tokens > 0)
@@ -519,10 +499,10 @@ export const register: Register = on => {
         W - (usedGroups.length - 1),
       )
       const hint = insight(snap.entries, fill, snap.used, snap.lang, [...hiddenIds, ...done, ...mutedIds])
-      const tempo = speed(points, await read($, usual))
+      const tempo = speed(points, usualPace)
       const prices = snap.prices.slice(0, 6)
-      const half = Math.ceil(prices.length / 2)
-      const priceW = Math.floor((W - 4) / 2)
+      const grid = priceGrid(W)
+      const priceRows = Math.ceil(prices.length / grid.columns)
       const toggle = (id: string) => () =>
         update($, expanded, prev => (prev.includes(id) ? prev.filter(n => n !== id) : [...prev, id]))
       const isOpen = (id: string) => open.includes(id)
@@ -599,24 +579,35 @@ export const register: Register = on => {
 
           {/* what fills the window */}
           {titleRow(t.whatFills, k(snap.used))}
-          <Text>
-            {usedGroups.map((g, i) => (
-              <Text>
-                {i > 0 ? ' ' : ''}
+          {/* A bar piece and its legend row share a hover group: pointing at either lights both.
+              The piece fills its whole cell when lit; pressing it opens the group, like the row. */}
+          <Box flexDirection="row">
+            {usedGroups.flatMap((g, i) => [
+              ...(i > 0 ? [<Text> </Text>] : []),
+              <Button
+                key={`bar-${g.id}`}
+                plain
+                label={g.label}
+                hover={{ scope: `group-${g.id}`, backgroundColor: g.color }}
+                onPress={go({ kind: 'group', id: g.id })}
+              >
                 <Text color={g.color}>{BLOCK.repeat(stack[i] ?? 0)}</Text>
-              </Text>
-            ))}
-          </Text>
+              </Button>,
+            ])}
+          </Box>
           {columnsHead}
           {usedGroups.map(g => {
             const name = g.label.slice(0, NAME - 3)
+            const lit = { scope: `group-${g.id}`, bold: true } as const
             return (
               <Box key={`row-${g.id}`} flexDirection="row">
-                <Text color={g.color}>■ </Text>
-                <Button key={`group-${g.id}`} plain label={g.label} onPress={go({ kind: 'group', id: g.id })}>
+                <Text color={g.color} hover={lit}>
+                  ■{' '}
+                </Text>
+                <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
                   {name}
                 </Button>
-                <Text>
+                <Text hover={lit}>
                   {' '.repeat(NAME - 2 - name.length)}
                   {k(g.tokens).padStart(NUM)}
                   <Text dimColor>{pctOfUsed(g.tokens).padStart(PCT)}</Text>
@@ -654,19 +645,23 @@ export const register: Register = on => {
 
           {/* what one action costs */}
           <Text bold>{t.prices.toUpperCase()}</Text>
-          <Text dimColor>{t.pricesHint}</Text>
           {prices.length === 0 && <Text dimColor>{t.noActions}</Text>}
-          {Array.from({ length: half }, (_, row) => {
-            const left = prices[row]
-            const right = prices[row + half]
-            const priceCell = (p: typeof left) =>
-              p ? `${p.name.padEnd(priceW - 7).slice(0, priceW - 7)}${k(p.average).padStart(5)}` : ''
-            return (
-              <Text>
-                {priceCell(left).padEnd(priceW + 4)}
-                {priceCell(right)}
-              </Text>
-            )
+          {Array.from({ length: priceRows }, (_, row) => {
+            const cells = Array.from({ length: grid.columns }, (_, c) => prices[row + c * priceRows])
+            // Name, average price, then how many times: a cheap action done often can outweigh
+            // a dear one done once.
+            const NAME_W = grid.width - 12
+            const priceCell = (p: (typeof cells)[number], last: boolean) =>
+              p ? (
+                <Text>
+                  {fitCell(p.name, NAME_W)}
+                  {k(p.average).padStart(5)}
+                  <Text dimColor>{` ×${p.count}`.padEnd(7 + (last ? 0 : 4))}</Text>
+                </Text>
+              ) : (
+                ' '.repeat(grid.width + (last ? 0 : 4))
+              )
+            return <Text>{cells.map((p, c) => priceCell(p, c === cells.length - 1))}</Text>
           })}
           {sectionGap}
 
@@ -710,13 +705,47 @@ export const register: Register = on => {
                 {'    0 '}
                 {shown.length > 2 ? t.turnRange(shown[1]!.turn, shown[shown.length - 1]!.turn) : ''}
               </Text>
-              {peaks.map((j, n) => (
-                <Text wrap="truncate-end" hover={{ scope: `peak-${n + 1}`, color: 'claude' }}>
-                  {`+${k(j.delta)}`.padStart(6)}
-                  <Text dimColor>{`  ${t.turn(j.turn)}  `}</Text>
-                  {j.cause ?? t.conversation}
-                </Text>
-              ))}
+              {/* Each jump fits one line, cut by hand: a Button doesn't truncate its label. A jump
+                  with more to read opens on a press, marked ▸ / ▾ like the folded blocks. */}
+              {peaks.map((j, n) => {
+                const delta = `+${k(j.delta)}`.padStart(6)
+                const turn = `  ${t.turn(j.turn)}  `
+                const caption = j.cause ?? t.conversation
+                // Opens when there is more to read: a kept whole text, or a label the line cuts.
+                const full = j.detail ?? caption
+                const fits = W - 2 - delta.length - turn.length
+                const opens = full !== caption || caption.length > fits
+                const room = Math.max(8, fits - (opens ? 2 : 0))
+                const line = caption.length > room ? `${caption.slice(0, room - 1)}…` : caption
+                const hover = { scope: `peak-${n + 1}`, color: 'claude' } as const
+                const isOpenJump = isOpen(`jump:${j.turn}`)
+                const row = (
+                  <Text>
+                    {delta}
+                    <Text dimColor>{turn}</Text>
+                    {line}
+                    {opens && <Text dimColor>{isOpenJump ? ' ▾' : ' ▸'}</Text>}
+                  </Text>
+                )
+                if (!opens) return <Text hover={hover}>{row}</Text>
+                // Opened: what the line doesn't already say. The label caption in full is not repeated.
+                const rest = line === caption && full.startsWith(caption) ? full.slice(caption.length).replace(/^[:\s]+/, '') : full
+                return (
+                  <Box flexDirection="column">
+                    <Button key={`jump-${j.turn}`} plain label={caption} hover={hover} onPress={toggle(`jump:${j.turn}`)}>
+                      {row}
+                    </Button>
+                    {/* wrapped by hand: the pane cuts a long Text at its edge rather than wrapping it */}
+                    {isOpenJump && (
+                      <Box paddingLeft={8} flexDirection="column">
+                        {wrapLines(rest || full, Math.max(10, W - 10)).map(l => (
+                          <Text dimColor>{l}</Text>
+                        ))}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })}
               {(session?.compacts ?? []).map(c => (
                 <Text wrap="truncate-end">
                   {`−${k(Math.max(0, c.before - c.after))}`.padStart(6)}

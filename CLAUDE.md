@@ -1,6 +1,6 @@
 # chudarin-context-mod
 
-Claude Code mod: side panel `/ctx` with context usage, limits, action prices and help pages. `/ctx-line` toggles a line above the prompt.
+Claude Code mod: side panel `/ctx` with context usage, limits, action prices and help pages.
 
 ## Layout
 

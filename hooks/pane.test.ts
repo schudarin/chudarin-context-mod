@@ -438,6 +438,10 @@ test('the chart block keeps the chart, jumps and compactions, and nothing double
   })
   const home = JSON.stringify(await ui.drawn())
   expect(home).toContain('Context load chart')
+  // No standing note under the prices: the numbers speak for themselves.
+  expect(home).not.toContain('the cheaper the way')
+  // Each price says how many times the action happened.
+  expect(home).toMatch(/Bash command[^×]*×1/)
   // "Heaviest steps" was the same list as the jumps: one place for it now.
   expect(home).not.toContain('Heaviest steps')
   await ui.press({ key: 'block-dynamics' })
@@ -540,4 +544,165 @@ test('after five idle minutes the panel says its data is stale, and the button r
   expect(await look()).toContain('Data is stale, last updated at 12:00')
   await ui.press({ key: 'refresh' })
   expect(await look()).not.toContain('Data is stale')
+})
+
+test('the mod registers one command, /ctx', async ($, on) => {
+  const names: string[] = []
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('store.get', () => ({ value: undefined }) as never)
+  on('store.keys', () => ({ value: [] }) as never)
+  on('store.set', () => ({ value: undefined }) as never)
+  on('store.delete', () => ({ value: undefined }) as never)
+  on('command.register', (_$, e) => {
+    names.push(e.name)
+    return { value: undefined } as never
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+  expect(names).toEqual(['ctx'])
+})
+
+test('a jump opens to its whole text', async ($, on) => {
+  const command = 'npm run build -- --filter @scope/a-very-long-package-name --verbose --log-level debug --reporter verbose --no-cache'
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('tool.check', () => ({ decision: 'allow' }) as never)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { text: 'o'.repeat(400) } }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  await $.tool.call({ tool: 'Bash', command } as never)
+  await $.session.measure({ context: { tokens: 70_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  await ui.press({ key: 'block-dynamics' })
+  expect(JSON.stringify(await ui.drawn())).not.toContain(command)
+  await ui.press({ key: 'jump-2' })
+  // The whole text, wrapped over lines: its last word is there too.
+  const open = JSON.stringify(await ui.drawn())
+  expect(open).toContain('@scope/a-very-long-package-name')
+  expect(open).toContain('--no-cache')
+  // Split over lines, not one long line the pane cuts off.
+  expect(open).not.toContain(command)
+  await ui.press({ key: 'jump-2' })
+  expect(JSON.stringify(await ui.drawn())).not.toContain('--no-cache')
+})
+
+test('a jump with nothing more to show is not a button', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  for (const tokens of [20_000, 70_000])
+    await $.session.measure({ context: { tokens, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  await ui.press({ key: 'block-dynamics' })
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('+50k')
+  expect(drawn).not.toContain('jump-2')
+})
+
+test('a jump logged without its whole text opens to its label when the line cuts it', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  const long = 'Bash ' + 'word '.repeat(30).trim()
+  const stored = {
+    startedAt: 0, requests: 2, read: 0, cached: 0, written: 0, compacts: [], prompts: 0, limits: {},
+    points: [
+      { tokens: 20_000, turn: 1, cause: null },
+      { tokens: 70_000, turn: 2, cause: long },
+    ],
+  }
+  on('store.get', (_$, e) => ({ value: e.key === 'session:test-session' ? stored : undefined }) as never)
+  on('store.keys', () => ({ value: ['session:test-session'] }) as never)
+  on('store.set', () => ({ value: undefined }) as never)
+  on('store.delete', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  await ui.press({ key: 'block-dynamics' })
+  const closed = JSON.stringify(await ui.drawn())
+  await ui.press({ key: 'jump-2' })
+  // The whole label, wrapped under the row: more is drawn than before.
+  expect(JSON.stringify(await ui.drawn()).length).toBeGreaterThan(closed.length)
+})
+
+test('a narrow pane keeps whole names: prices in one column', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: { ...props, bodyColumns: 40 } as never,
+  })
+  expect(JSON.stringify(await ui.drawn())).toContain('Bash command')
+})
+
+test('the context bar and its legend light each other, and a bar piece opens its group', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  // Every member of the tool-work group sits straight in a Box, so it can light the others.
+  type Node = { type?: string; children?: unknown[] }
+  const parents: string[] = []
+  const walk = (n: unknown, parent: string) => {
+    if (!n || typeof n !== 'object') return
+    const node = n as Node
+    const { children: _children, ...own } = node
+    if (JSON.stringify(own).includes('"scope":"group-tools"')) parents.push(parent)
+    for (const c of node.children ?? []) walk(c, node.type ?? '')
+  }
+  walk(await ui.drawn(), '')
+  expect(parents.length).toBeGreaterThan(1)
+  expect(parents.every(p => p === 'Box')).toBe(true)
+  await ui.press({ key: 'bar-tools' })
+  expect(JSON.stringify(await ui.drawn())).toContain('TOOL WORK')
 })

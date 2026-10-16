@@ -1,7 +1,8 @@
-export type Step = { label: string; tokens: number }
+export type Step = { label: string; tokens: number; detail?: string }
 export type Category = { name: string; tokens: number; color: string; isFree: boolean }
 export type Item = { name: string; tokens: number }
-export type Point = { tokens: number; turn: number; cause: string | null }
+// `detail`: the cause's whole text (full command, full path), for a jump opened in the panel.
+export type Point = { tokens: number; turn: number; cause: string | null; detail?: string | null }
 export type Compact = { turn: number; trigger: string; before: number; after: number }
 // Samples of one rate-limit window, keyed by its reset time.
 export type LimitTrack = { resetsAt: string; samples: { at: number; percent: number }[] }
@@ -58,7 +59,6 @@ declare module 'claude-code' {
       snapshot: Snapshot | null
       expanded: string[]
       page: Page
-      bandOn: boolean
       lang: 'ru' | 'en'
       // The usual context rise per turn over past sessions; null until there are enough.
       usual: number | null

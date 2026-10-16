@@ -24,6 +24,56 @@ export function shorten(text: string, max: number): string {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).trimEnd()}…`
 }
 
+// The whole call, for a jump opened in the panel: description, full command or path, capped.
+export function detail(e: Record<string, unknown>): string {
+  const tool = String(e.tool)
+  const short = tool.startsWith('mcp__') ? tool.split('__').slice(1).join(':') : tool
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  const main = str(e.file_path) || str(e.skill) || str(e.command) || str(e.query) || str(e.url) || str(e.pattern)
+  const desc = str(e.description)
+  const arg = desc && main && desc !== main ? `${desc}: ${main}` : desc || main
+  return shorten(arg ? `${short} ${arg}` : short, 400)
+}
+
+// Text broken into lines of at most `width`: on spaces, and a word longer than a line is split.
+export function wrapLines(text: string, width: number): string[] {
+  const out: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    let w = word
+    while (w.length > width) {
+      if (line) out.push(line)
+      line = ''
+      out.push(w.slice(0, width))
+      w = w.slice(width)
+    }
+    if (!line) line = w
+    else if (line.length + 1 + w.length <= width) line += ` ${w}`
+    else {
+      out.push(line)
+      line = w
+    }
+  }
+  if (line) out.push(line)
+  return out
+}
+
+// A text in exactly `width` cells: padded, or cut with an ellipsis so it never runs into the next.
+export function fitCell(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
+}
+
+// Action prices: one column when the pane is narrow, two when wide, each at most 36 cells so a
+// number stays next to its name.
+export function priceGrid(width: number): { columns: 1 | 2; width: number } {
+  return width < 60 ? { columns: 1, width: Math.min(width, 40) } : { columns: 2, width: Math.min(36, Math.floor((width - 4) / 2)) }
+}
+
+// Name column for group and entry lists: what is left after tokens, share and the chevron.
+export function nameWidth(width: number): number {
+  return Math.min(30, Math.max(12, width - 17))
+}
+
 // Group name for a tool: built-in tools by name, MCP tools by server.
 export function kind(tool: string): string {
   return tool.startsWith('mcp__') ? `MCP ${tool.split('__')[1]}` : tool
@@ -43,14 +93,6 @@ export function label(e: Record<string, unknown>): string {
     (typeof e.pattern === 'string' && e.pattern) ||
     ''
   return arg ? `${short} ${shorten(arg, 45)}` : short
-}
-
-export function sparkline(points: readonly number[]): string {
-  if (points.length === 0) return ''
-  const lo = Math.min(...points)
-  const hi = Math.max(...points)
-  const span = hi - lo || 1
-  return points.map(p => BARS[Math.round(((p - lo) / span) * (BARS.length - 1))]).join('')
 }
 
 // A column chart from zero, one column per value, top row first; each cell in eighths.
@@ -149,11 +191,13 @@ export function turnRises(points: readonly { tokens: number }[]): number[] {
 }
 
 // The biggest rises from one turn to the next, with what likely caused them.
-export function jumps(points: readonly Point[], n: number): { delta: number; turn: number; cause: string | null }[] {
-  const out: { delta: number; turn: number; cause: string | null }[] = []
+type Jump = { delta: number; turn: number; cause: string | null; detail: string | null }
+
+export function jumps(points: readonly Point[], n: number): Jump[] {
+  const out: Jump[] = []
   for (let i = 1; i < points.length; i++) {
     const delta = points[i]!.tokens - points[i - 1]!.tokens
-    if (delta > 0) out.push({ delta, turn: points[i]!.turn, cause: points[i]!.cause })
+    if (delta > 0) out.push({ delta, turn: points[i]!.turn, cause: points[i]!.cause, detail: points[i]!.detail ?? null })
   }
   return out.sort((a, b) => b.delta - a.delta).slice(0, n)
 }
