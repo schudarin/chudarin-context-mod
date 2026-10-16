@@ -143,6 +143,11 @@ export function limitForecast(track: LimitTrack, now: number, resetsAt: number):
   return now + minutes * MINUTE >= resetsAt ? 'untilReset' : { minutes }
 }
 
+// What each turn added to the context, oldest first; a compaction's drop counts as nothing.
+export function turnRises(points: readonly { tokens: number }[]): number[] {
+  return points.slice(1).map((p, i) => Math.max(0, p.tokens - points[i]!.tokens))
+}
+
 // The biggest rises from one turn to the next, with what likely caused them.
 export function jumps(points: readonly Point[], n: number): { delta: number; turn: number; cause: string | null }[] {
   const out: { delta: number; turn: number; cause: string | null }[] = []

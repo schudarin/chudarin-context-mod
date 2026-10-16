@@ -12,6 +12,20 @@ const duration = (m: number, h: string, min: string) => {
   const rest = r % 60
   return [hours ? `${hours} ${h}` : '', rest ? `${rest} ${min}` : ''].filter(Boolean).join(' ')
 }
+// Time a session has run: "2 h 30 min", "40 min", "2 h".
+const elapsed = (m: number, h: string, min: string) => {
+  const hours = Math.floor(m / 60)
+  const rest = m % 60
+  return [hours ? `${hours} ${h}` : '', rest || !hours ? `${rest} ${min}` : ''].filter(Boolean).join(' ')
+}
+// A percent to one decimal, without a trailing .0.
+const percent = (x: number, comma: boolean) => {
+  const s = String(Math.round(x * 10) / 10)
+  return comma ? s.replace('.', ',') : s
+}
+// Russian noun form for a count: 1 сообщение, 2 сообщения, 5 сообщений.
+const plural = (n: number, one: string, few: string, many: string) =>
+  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many
 // How many times faster or slower, to one decimal: 1.74 → 1.7, 0.5 → 2.
 const times = (ratio: number) => Math.round((ratio >= 1 ? ratio : 1 / ratio) * 10) / 10
 
@@ -67,15 +81,13 @@ const ru = {
   noActions: 'Пока нет действий.',
   session: 'За сессию',
   since: (at: string) => `с ${at}`,
-  readByModel: 'Прочитано моделью',
-  fromCache: (pct: number) => `из кэша ${pct}%`,
-  written: 'Написано мной',
-  requests: 'Запросов к модели',
-  compacts: 'Компактов',
-  dropped: (tokens: string) => `сбросили ${tokens}`,
-  sessionHint: 'каждый запрос заново читает весь контекст, кэш в разы дешевле',
-  growth: 'Как рос контекст',
-  pace: (avg: string, recent: string) => `в среднем +${avg} за ход, последние 5 ходов +${recent}`,
+  sessionRuns: (minutes: number, prompts: number) =>
+    `Идёт ${elapsed(minutes, 'ч', 'мин')}, ${prompts} ${plural(prompts, 'твоё сообщение', 'твоих сообщения', 'твоих сообщений')}`,
+  sessionSpent: (five: number, week: number | null) =>
+    `Съела ${percent(five, true)}% лимита на 5 часов${week === null ? '' : ` и ${percent(week, true)}% недельного`}`,
+  perMessage: (pct: number) => `Одно сообщение в среднем: ${percent(pct, true)}% лимита на 5 часов`,
+  compactsLine: (n: number, dropped: string) => (n === 0 ? 'Компактов не было' : `Компактов: ${n}, сбросили ${dropped}`),
+  growth: 'График загрузки контекста',
   turnRange: (from: number, to: number) => `ход ${from} → ход ${to}`,
   turn: (n: number) => `ход ${n}`,
   conversation: 'переписка',
@@ -83,8 +95,6 @@ const ru = {
   manual: 'вручную',
   auto: 'автоматически',
   plugin: 'плагином',
-  steps: 'Самые тяжёлые шаги',
-  noSteps: 'Пока нет шагов.',
   groupTools: 'Работа инструментов',
   groupService: 'Служебное Claude Code',
   groupChat: 'Наш разговор',
@@ -148,15 +158,12 @@ const en: typeof ru = {
   noActions: 'No actions yet.',
   session: 'This session',
   since: at => `since ${at}`,
-  readByModel: 'Read by the model',
-  fromCache: pct => `${pct}% from cache`,
-  written: 'Written by Claude',
-  requests: 'Model requests',
-  compacts: 'Compactions',
-  dropped: tokens => `dropped ${tokens}`,
-  sessionHint: 'every request reads the whole context again; cached input is much cheaper',
-  growth: 'How the context grew',
-  pace: (avg, recent) => `+${avg} per turn on average, +${recent} over the last 5 turns`,
+  sessionRuns: (minutes, prompts) => `Running ${elapsed(minutes, 'h', 'min')}, ${prompts} ${prompts === 1 ? 'message' : 'messages'} from you`,
+  sessionSpent: (five, week) =>
+    `Used ${percent(five, false)}% of the 5-hour limit${week === null ? '' : ` and ${percent(week, false)}% of the weekly one`}`,
+  perMessage: pct => `One message on average: ${percent(pct, false)}% of the 5-hour limit`,
+  compactsLine: (n, dropped) => (n === 0 ? 'No compactions' : `Compactions: ${n}, dropped ${dropped}`),
+  growth: 'Context load chart',
   turnRange: (from, to) => `turn ${from} → turn ${to}`,
   turn: n => `turn ${n}`,
   conversation: 'conversation',
@@ -164,8 +171,6 @@ const en: typeof ru = {
   manual: 'manual',
   auto: 'automatic',
   plugin: 'plugin',
-  steps: 'Heaviest steps',
-  noSteps: 'No steps yet.',
   groupTools: 'Tool work',
   groupService: 'Claude Code itself',
   groupChat: 'Our conversation',

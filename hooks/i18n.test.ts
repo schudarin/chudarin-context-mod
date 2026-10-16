@@ -47,3 +47,18 @@ test('limit forecast reads as time left', () => {
   expect(UI.ru.limitUntilReset).toBe('хватит до сброса')
   expect(UI.en.limitUntilReset).toBe('lasts until reset')
 })
+
+test('the session block speaks in plain sentences', () => {
+  expect(UI.ru.sessionRuns(150, 4)).toBe('Идёт 2 ч 30 мин, 4 твоих сообщения')
+  expect(UI.ru.sessionRuns(40, 1)).toBe('Идёт 40 мин, 1 твоё сообщение')
+  expect(UI.ru.sessionRuns(61, 25)).toBe('Идёт 1 ч 1 мин, 25 твоих сообщений')
+  expect(UI.en.sessionRuns(150, 1)).toBe('Running 2 h 30 min, 1 message from you')
+  expect(UI.ru.sessionSpent(20, 4)).toBe('Съела 20% лимита на 5 часов и 4% недельного')
+  expect(UI.ru.sessionSpent(20, null)).toBe('Съела 20% лимита на 5 часов')
+  expect(UI.en.sessionSpent(20, 4)).toBe('Used 20% of the 5-hour limit and 4% of the weekly one')
+  expect(UI.ru.perMessage(0.5)).toBe('Одно сообщение в среднем: 0,5% лимита на 5 часов')
+  expect(UI.en.perMessage(5)).toBe('One message on average: 5% of the 5-hour limit')
+  expect(UI.ru.compactsLine(0, '')).toBe('Компактов не было')
+  expect(UI.ru.compactsLine(2, '300k')).toBe('Компактов: 2, сбросили 300k')
+  expect(UI.en.compactsLine(2, '300k')).toBe('Compactions: 2, dropped 300k')
+})

@@ -36,7 +36,7 @@ const HELP: Record<string, Entry> = {
     took: 'занял',
     ru: {
       label: 'Вывод команд Bash',
-      what: 'Всё, что напечатали команды, которые я запускал: тесты, сборка, поиск, git. Вывод остаётся в контексте до конца сессии.',
+      what: 'Всё, что напечатали команды, которые запускал Claude: тесты, сборка, поиск, git. Вывод остаётся в контексте до конца сессии.',
       todo: 'Проси Claude запускать тесты и разбирать длинные логи в субагенте: в чат вернётся только итог.',
       prompt: 'Дальше запускай тесты и разбирай длинные логи в субагенте, в чат возвращай только итог.',
     },
@@ -52,7 +52,7 @@ const HELP: Record<string, Entry> = {
     took: 'заняли',
     ru: {
       label: 'Прочитанные файлы',
-      what: 'Содержимое файлов, которые я прочитал. Файл остаётся в контексте целиком, даже если нужна была пара строк.',
+      what: 'Содержимое файлов, которые прочитал Claude. Файл остаётся в контексте целиком, даже если нужна была пара строк.',
       todo: 'Называй в задаче файл и функцию: чем точнее просьба, тем меньше Claude читает.',
     },
     en: {
@@ -72,7 +72,7 @@ const HELP: Record<string, Entry> = {
     took: 'заняли',
     ru: {
       label: 'Загруженные страницы',
-      what: 'Веб-страницы, которые я загрузил и пересказал в текст.',
+      what: 'Веб-страницы, которые Claude загрузил и пересказал в текст.',
       todo: 'Проси Claude искать в интернете и читать страницы в субагенте: в чат вернётся только итог.',
       prompt: WEB_RU,
     },
@@ -112,21 +112,21 @@ const HELP: Record<string, Entry> = {
   'result:AskUserQuestion': {
     group: 'chat',
     took: 'заняли',
-    ru: { label: 'Твои ответы на вопросы', what: 'Варианты и ответы из вопросов, которые я задавал.', todo: null },
+    ru: { label: 'Твои ответы на вопросы', what: 'Варианты и ответы из вопросов, которые задавал Claude.', todo: null },
     en: { label: 'Your answers to questions', what: 'Options and answers from the questions Claude asked.', todo: null },
   },
   'result:ToolSearch': {
     group: 'service',
     took: 'заняли',
-    ru: { label: 'Подгруженные схемы', what: 'Описания инструментов, которые я подгрузил по ходу работы.', todo: null },
+    ru: { label: 'Подгруженные схемы', what: 'Описания инструментов, которые Claude подгрузил по ходу работы.', todo: null },
     en: { label: 'Loaded tool schemas', what: 'Descriptions of tools Claude loaded along the way.', todo: null },
   },
   code: {
     group: 'tools',
     took: 'занял',
     ru: {
-      label: 'Код, который я написал',
-      what: 'Содержимое файлов, которые я создал или поправил через Write и Edit. Я отправляю текст целиком, и он остаётся в контексте.',
+      label: 'Код, который написал Claude',
+      what: 'Содержимое файлов, которые Claude создал или поправил через Write и Edit. Текст уходит целиком и остаётся в контексте.',
       todo: null,
     },
     en: {
@@ -138,7 +138,7 @@ const HELP: Record<string, Entry> = {
   args: {
     group: 'tools',
     took: 'заняли',
-    ru: { label: 'Аргументы вызовов', what: 'Команды, запросы и параметры, с которыми я вызывал инструменты.', todo: null },
+    ru: { label: 'Аргументы вызовов', what: 'Команды, запросы и параметры, с которыми Claude вызывал инструменты.', todo: null },
     en: { label: 'Tool call arguments', what: 'Commands, queries and parameters Claude passed to tools.', todo: null },
   },
   reminders: {
@@ -160,7 +160,7 @@ const HELP: Record<string, Entry> = {
     took: 'заняли',
     ru: {
       label: 'Загруженные скиллы',
-      what: 'Полный текст скиллов, которые я вызвал. Скилл остаётся в контексте до конца сессии.',
+      what: 'Полный текст скиллов, которые вызвал Claude. Скилл остаётся в контексте до конца сессии.',
       todo: null,
     },
     en: {
@@ -192,13 +192,13 @@ const HELP: Record<string, Entry> = {
   assistant: {
     group: 'chat',
     took: 'заняли',
-    ru: { label: 'Мои ответы', what: 'Текст моих ответов тебе.', todo: null },
+    ru: { label: 'Ответы Claude', what: 'Текст ответов Claude тебе.', todo: null },
     en: { label: "Claude's replies", what: "The text of Claude's replies to you.", todo: null },
   },
   thinking: {
     group: 'chat',
     took: 'заняли',
-    ru: { label: 'Мои рассуждения', what: 'Мои рассуждения перед ответом, которые возвращаются в контекст.', todo: 'На простых задачах снижай /effort: рассуждений станет меньше.', prompt: '/effort' },
+    ru: { label: 'Рассуждения Claude', what: 'Рассуждения Claude перед ответом, которые возвращаются в контекст.', todo: 'На простых задачах снижай /effort: рассуждений станет меньше.', prompt: '/effort' },
     en: { label: "Claude's thinking", what: 'Reasoning before a reply that goes back into the context.', todo: 'Lower /effort on simple tasks: Claude will reason less.', prompt: '/effort' },
   },
   'cat:System prompt': {
@@ -253,7 +253,7 @@ const HELP: Record<string, Entry> = {
   'cat:Custom agents': {
     group: 'rules',
     took: 'заняли',
-    ru: { label: 'Описания агентов', what: 'Описания твоих агентов из .claude/agents, чтобы я знал, кого можно позвать.', todo: null },
+    ru: { label: 'Описания агентов', what: 'Описания твоих агентов из .claude/agents, чтобы Claude знал, кого можно позвать.', todo: null },
     en: { label: 'Agent descriptions', what: 'Descriptions of your agents from .claude/agents, so Claude knows whom it can call.', todo: null },
   },
   'cat:Memory files': {
@@ -277,7 +277,7 @@ const HELP: Record<string, Entry> = {
     took: 'занял',
     ru: {
       label: 'Список скиллов',
-      what: 'Короткие описания всех установленных скиллов, чтобы я знал, какие есть.',
+      what: 'Короткие описания всех установленных скиллов, чтобы Claude знал, какие есть.',
       todo: 'Удали скиллы, которыми не пользуешься.',
     },
     en: {

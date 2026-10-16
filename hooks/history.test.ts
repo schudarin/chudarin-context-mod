@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
+import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
 
 const usage = (input: number, read: number, write: number, out: number) => ({
   input_tokens: input,
@@ -44,4 +44,22 @@ test('sessionKey and pruneKeys keep only the newest sessions', () => {
   const keys = ['other', 'session:a', 'session:b', 'session:c', 'session:d']
   expect(pruneKeys(keys, 2)).toEqual(['session:a', 'session:b'])
   expect(pruneKeys(keys, 10)).toEqual([])
+})
+
+test('addPrompt counts what the person sent, logs from before it count as zero', () => {
+  const old = { ...emptyLog(0) } as Partial<ReturnType<typeof emptyLog>>
+  delete old.prompts
+  expect(addPrompt(old as ReturnType<typeof emptyLog>).prompts).toBe(1)
+  expect(addPrompt(addPrompt(emptyLog(0))).prompts).toBe(2)
+})
+
+test('addLimit adds up what the session spent, across a reset', () => {
+  let l = addLimit(emptyLog(0), 'five_hour', 'r1', 40)
+  expect(l.limits.five_hour).toEqual({ resetsAt: 'r1', last: 40, spent: 0 })
+  l = addLimit(l, 'five_hour', 'r1', 55)
+  l = addLimit(l, 'five_hour', 'r1', 55)
+  expect(l.limits.five_hour!.spent).toBe(15)
+  // After the reset the percent starts from zero: all of it is this session's.
+  l = addLimit(l, 'five_hour', 'r2', 6)
+  expect(l.limits.five_hour).toEqual({ resetsAt: 'r2', last: 6, spent: 21 })
 })

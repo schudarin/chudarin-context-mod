@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, detailsFor, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, sparkline, trackLimit, usualRise, windowRows } from './model'
+import { chartRows, detailsFor, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, sparkline, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
 
@@ -161,4 +161,9 @@ test('limitForecast extrapolates the last hour', () => {
   // Flat, or the reset comes first.
   expect(limitForecast(track([[0, 50], [30, 50]]), 30 * MIN, resetFar)).toBe('untilReset')
   expect(limitForecast(track([[0, 50], [30, 65]]), 30 * MIN, 60 * MIN)).toBe('untilReset')
+})
+
+test('turnRises gives what each turn added; a compaction adds nothing', () => {
+  expect(turnRises([pt(10_000, 1), pt(12_000, 2), pt(50_000, 3), pt(5_000, 4), pt(6_000, 5)])).toEqual([2_000, 38_000, 0, 1_000])
+  expect(turnRises([pt(10_000, 1)])).toEqual([])
 })

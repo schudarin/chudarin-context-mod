@@ -134,6 +134,11 @@ test('the session title and its start time sit side by side', async ($, on) => {
     written: 2_000,
     points: [],
     compacts: [],
+    prompts: 4,
+    limits: {
+      five_hour: { resetsAt: '2026-10-15T19:00:00', last: 5, spent: 20 },
+      seven_day: { resetsAt: '2026-10-19T10:00:00', last: 72, spent: 4 },
+    },
   }
   on('store.get', () => ({ value: stored }) as never)
   on('store.keys', () => ({ value: ['session:test-session'] }) as never)
@@ -153,6 +158,14 @@ test('the session title and its start time sit side by side', async ($, on) => {
   const home = JSON.stringify(await ui.drawn())
   expect(home).toContain('THIS SESSION')
   expect(home).toMatch(/"  since /)
+  // No standing explanation under the block: nothing to act on.
+  expect(home).not.toContain('reads the whole context')
+  // Plain sentences instead of raw totals.
+  expect(home).toContain('Running 2 h 30 min, 4 messages from you')
+  expect(home).toContain('Used 20% of the 5-hour limit and 4% of the weekly one')
+  expect(home).toContain('One message on average: 5% of the 5-hour limit')
+  expect(home).toContain('No compactions')
+  expect(home).not.toContain('Read by the model')
 })
 
 test('the context tile compares the pace with past sessions', async ($, on) => {
@@ -406,4 +419,52 @@ test('the 5-hour tile says how long the limit lasts at this pace', async ($, on)
     props: props as never,
   })
   expect(JSON.stringify(await ui.drawn())).toContain('about 1 h 10 min left')
+})
+
+test('the chart block keeps the chart, jumps and compactions, and nothing doubled', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  const home = JSON.stringify(await ui.drawn())
+  expect(home).toContain('Context load chart')
+  // "Heaviest steps" was the same list as the jumps: one place for it now.
+  expect(home).not.toContain('Heaviest steps')
+  await ui.press({ key: 'block-dynamics' })
+  // The pace line repeated the speed mark on the context tile.
+  expect(JSON.stringify(await ui.drawn())).not.toContain('per turn on average')
+})
+
+test('hovering a jump in the list lights its column on the chart', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  for (const tokens of [20_000, 25_000, 70_000, 72_000])
+    await $.session.measure({ context: { tokens, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  await ui.press({ key: 'block-dynamics' })
+  const drawn = JSON.stringify(await ui.drawn())
+  // The +45k jump: its list line and its column's cells share one hover group.
+  const group = drawn.split('"scope":"peak-1"').length - 1
+  expect(group).toBeGreaterThan(1)
+  expect(drawn).toContain('+45k')
 })

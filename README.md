@@ -29,7 +29,9 @@ in plain words what it is, why it's that big, and what you can do about it.
 From top to bottom:
 
 - **Context, 5-hour limit, weekly limit.** Three meters, green, yellow or red. Under the context
-  meter, roughly how many turns are left before auto-compaction at the current pace.
+  meter, roughly how many turns are left before auto-compaction at the current pace, and how fast
+  the context grows compared with your past sessions (🐌 🐈 🐇 🚀; it needs three sessions of five
+  or more turns). Under the 5-hour meter, how long the limit lasts at the pace of the last hour.
 - **What fills the context.** One bar for the whole window, split into four groups: tool work,
   Claude Code itself, your conversation, skills and rules. Click a group to open it.
 - **A hint.** One line, only when one item is big and you can do something about it: "Bash output
@@ -38,10 +40,13 @@ From top to bottom:
   "Hide" hides it for the session; the item page also has "Don't show again". Most of the advice comes from Anthropic's [guide to reducing token usage](https://code.claude.com/docs/en/costs#reduce-token-usage).
 - **What an action costs.** The average price of one screenshot, one file written, one Bash command,
   one skill. This is the part that teaches: you see which habits are expensive.
-- **This session.** Everything the model has read across all requests, how much of it came from
-  cache, what Claude wrote, how many requests and compactions there were. Compactions don't reset it.
-- **How the context grew** and **Heaviest steps**, folded. A chart per turn with the biggest jumps
-  and every compaction, and the tool calls that brought in the most.
+- **This session.** How long it has run and how many messages you sent, how much of the 5-hour and
+  weekly limits it used, what one message costs on average, and the compactions. A long session
+  makes every message dearer, since each one sends the whole context again. The limits are shared,
+  so sessions open side by side count too.
+- **Context load chart**, folded. One column per turn, as tall as what that turn added, so a heavy
+  turn stands out as a peak. Below it, the five biggest jumps with their cause (point at one
+  to light its column), and every compaction.
 
 Click a group to see its items, click an item to get its help page:
 
@@ -85,8 +90,8 @@ the prompt.
   images. The split is estimated at about 4 characters per token, then scaled so the parts add up
   to the Messages total from `/context`.
 - **Images** count as 1.5k each. The conversation doesn't carry their size, so this is a guess.
-- **This session** adds up the token counts the API reports for every request. These are exact.
-  The log is kept per session, survives a restart and `--resume`, and holds the last 30 sessions.
+- **This session** adds up the rises of each limit's percent while the session runs, and counts
+  the prompts you send (slash commands aside). The log is kept per session, survives a restart and `--resume`, and holds the last 30 sessions.
   It starts when the mod is installed; earlier history isn't counted.
 - **Limits** come from your plan's rate-limit windows. With an API key there are none, and the
   limit meters don't show.

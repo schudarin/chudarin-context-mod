@@ -16,7 +16,14 @@ export type SessionLog = {
   written: number
   points: Point[]
   compacts: Compact[]
+  // Prompts the person sent (slash commands left out).
+  prompts: number
+  // What this session spent of each plan limit, by kind (five_hour, seven_day).
+  limits: Record<string, LimitSpend>
 }
+
+// One plan limit as the session saw it: the last percent and how much it has added up.
+export type LimitSpend = { resetsAt: string; last: number; spent: number }
 
 export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
 
@@ -46,7 +53,6 @@ declare module 'claude-code' {
     'chudarin-context-mod': {
       log: SessionLog | null
       heaviest: Step | null
-      top: Step[]
       snapshot: Snapshot | null
       expanded: string[]
       page: Page

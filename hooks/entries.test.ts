@@ -41,7 +41,7 @@ test('buildEntries sorts the conversation and categories into the four groups', 
   expect(by['result:Bash']!.group).toBe('tools')
   expect(by['result:Bash']!.label).toBe('Вывод команд Bash')
   expect(by['result:Bash']!.top[0]!.label).toBe('Bash Run tests')
-  expect(by['code']!.label).toBe('Код, который я написал')
+  expect(by['code']!.label).toBe('Код, который написал Claude')
   expect(by['code']!.top[0]!.label).toBe('Write App.tsx')
   expect(by['result:Read']!.label).toBe('Прочитанные файлы')
   expect(by['reminders']!.group).toBe('service')

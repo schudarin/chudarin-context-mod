@@ -5,12 +5,11 @@ import type { LimitTrack, Page, SessionLog, Snapshot, Step } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
-import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, detailsFor, jumps, k, label, limitForecast, pace, resetLabel, sparkline, speed, trackLimit, usualRise, windowRows } from './model'
+import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
+import { chartRows, detailsFor, jumps, k, label, limitForecast, pace, resetLabel, sparkline, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
-const top = atom({ plugin: 'chudarin-context-mod', key: 'top' } as const, [])
 const snapshot = atom({ plugin: 'chudarin-context-mod', key: 'snapshot' } as const, null)
 const expanded = atom({ plugin: 'chudarin-context-mod', key: 'expanded' } as const, [])
 const page = atom({ plugin: 'chudarin-context-mod', key: 'page' } as const, { kind: 'home' } as Page)
@@ -59,7 +58,6 @@ const PANE = 'chudarin-context-mod'
 const KEEP_SESSIONS = 30
 const BAND_POINTS = 24
 const CHART_ROWS = 6
-const TOP_STEPS = 8
 // Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
 const BLOCK = '▆'
 const EMPTY = '·'
@@ -121,6 +119,13 @@ async function refresh($: EngineInterface) {
   await update($, snapshot, () => next)
   const five = usage.rateLimits.find(r => /five_hour/.test(r.kind) && !/fable/i.test(r.kind))
   if (five?.resetsAt) await sampleLimit($, five.resetsAt, five.percentUsed)
+  // What this session spent of each limit; the log is a nice-to-have, a failure must not stop the refresh.
+  const week = usage.rateLimits.find(r => /seven_day/.test(r.kind) && !/fable/i.test(r.kind))
+  for (const [kind, r] of [['five_hour', five], ['seven_day', week]] as const)
+    if (r?.resetsAt) {
+      const { resetsAt, percentUsed } = r
+      await saveLog($, l => addLimit(l, kind, resetsAt, percentUsed)).catch(err => $.ui.log(`chudarin-context-mod: limit not logged: ${String(err)}`))
+    }
 }
 
 export const register: Register = on => {
@@ -133,7 +138,8 @@ export const register: Register = on => {
     const id = await $.session.id()
     const stored = (await $.store.get(sessionKey(id))) as SessionLog | undefined
     const now = await $.clock.now()
-    await update($, log, () => stored ?? emptyLog(now))
+    // Logs from older versions lack newer fields; the empty log fills them in.
+    await update($, log, () => (stored ? { ...emptyLog(stored.startedAt), ...stored } : emptyLog(now)))
     for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
     // The usual pace, from the other sessions in the store.
     const others: SessionLog[] = []
@@ -187,6 +193,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     await update($, heaviest, () => null)
     await markDone($, p => !p.startsWith('/') && e.text.includes(p))
+    if (!e.command && !e.isMeta) await saveLog($, addPrompt).catch(err => $.ui.log(`chudarin-context-mod: prompt not logged: ${String(err)}`))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -196,7 +203,6 @@ export const register: Register = on => {
     const tokens = Math.round((r.text?.length ?? 0) / 4)
     const step: Step = { label: label(e as Record<string, unknown>), tokens }
     await update($, heaviest, prev => (prev && prev.tokens >= tokens ? prev : step))
-    await update($, top, prev => [...prev, step].sort((a, b) => b.tokens - a.tokens).slice(0, TOP_STEPS))
     return r
   }).catch(($, e, next) => next(e))
 
@@ -257,7 +263,8 @@ export const register: Register = on => {
 
       const session = await read($, log)
       const points = session?.points ?? []
-      const steps = await read($, top)
+      const fiveSpent = session?.limits?.five_hour?.spent ?? null
+      const weekSpent = session?.limits?.seven_day?.spent ?? null
       const open = await read($, expanded)
       const where = await read($, page)
       const now = await $.clock.now()
@@ -493,8 +500,38 @@ export const register: Register = on => {
       const toggle = (id: string) => () =>
         update($, expanded, prev => (prev.includes(id) ? prev.filter(n => n !== id) : [...prev, id]))
       const isOpen = (id: string) => open.includes(id)
-      const shown = points.slice(-Math.max(10, W - 8))
-      const chartMax = Math.max(0, ...shown.map(p => p.tokens))
+      // One column per turn: what that turn added, so a heavy turn stands out as a peak.
+      const shown = points.slice(-Math.max(10, W - 8) - 1)
+      const rises = turnRises(shown)
+      const chartMax = Math.max(0, ...rises)
+      // The five biggest jumps, listed below the chart; each one's column joins its hover group.
+      const peaks = jumps(shown, 5)
+      const peakAt = new Map(peaks.map((j, n) => [shown.findIndex(p => p.turn === j.turn) - 1, n + 1]))
+      // A chart row split so each peak's cell joins its hover group: pointing at a jump in the
+      // list lights its column. The surface does the lighting; no hook runs.
+      const chartLine = (line: string) => {
+        const parts: ReturnType<typeof Text>[] = []
+        let run = ''
+        const flush = () => {
+          if (run) parts.push(<Text color="suggestion">{run}</Text>)
+          run = ''
+        }
+        for (let c = 0; c < line.length; c++) {
+          const n = peakAt.get(c)
+          if (n === undefined) {
+            run += line[c]
+            continue
+          }
+          flush()
+          parts.push(
+            <Text color="suggestion" hover={{ scope: `peak-${n}`, color: 'claude', bold: true }}>
+              {line[c]}
+            </Text>,
+          )
+        }
+        flush()
+        return parts
+      }
 
       return (
         <Box flexDirection="column" paddingX={PAD}>
@@ -610,33 +647,14 @@ export const register: Register = on => {
           {session && session.requests > 0 && (
             <Box flexDirection="column">
               {titleNote(t.session, t.since(resetLabel(new Date(session.startedAt).toISOString(), now)))}
+              <Text>{t.sessionRuns(Math.max(0, Math.round((now - session.startedAt) / 60_000)), session.prompts ?? 0)}</Text>
+              {fiveSpent !== null && <Text>{t.sessionSpent(fiveSpent, weekSpent)}</Text>}
+              {fiveSpent !== null && fiveSpent > 0 && (session.prompts ?? 0) > 0 && (
+                <Text>{t.perMessage(fiveSpent / (session.prompts ?? 1))}</Text>
+              )}
               <Text>
-                {t.readByModel.padEnd(NAME)}
-                {k(session.read).padStart(NUM)}
-                <Text dimColor>
-                  {'  '}
-                  {t.fromCache(session.read ? Math.round((session.cached / session.read) * 100) : 0)}
-                </Text>
+                {t.compactsLine(session.compacts.length, k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
               </Text>
-              <Text>
-                {t.written.padEnd(NAME)}
-                {k(session.written).padStart(NUM)}
-              </Text>
-              <Text>
-                {t.requests.padEnd(NAME)}
-                {String(session.requests).padStart(NUM)}
-              </Text>
-              <Text>
-                {t.compacts.padEnd(NAME)}
-                {String(session.compacts.length).padStart(NUM)}
-                {session.compacts.length > 0 && (
-                  <Text dimColor>
-                    {'  '}
-                    {t.dropped(k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
-                  </Text>
-                )}
-              </Text>
-              <Text dimColor>{t.sessionHint}</Text>
               {sectionGap}
             </Box>
           )}
@@ -650,24 +668,21 @@ export const register: Register = on => {
           </Button>
           {isOpen('block:dynamics') && (
             <Box flexDirection="column" paddingLeft={2}>
-              <Text dimColor>
-                {t.pace(k(Math.round(v.overall)), k(Math.round(v.recent)))}
-              </Text>
               {chartRows(
-                shown.map(p => p.tokens),
+                rises,
                 CHART_ROWS,
               ).map((line, i) => (
                 <Text>
                   <Text dimColor>{(i === 0 ? k(chartMax) : '').padStart(5)} </Text>
-                  <Text color="suggestion">{line}</Text>
+                  {chartLine(line)}
                 </Text>
               ))}
               <Text dimColor>
                 {'    0 '}
-                {shown.length > 1 ? t.turnRange(shown[0]!.turn, shown[shown.length - 1]!.turn) : ''}
+                {shown.length > 2 ? t.turnRange(shown[1]!.turn, shown[shown.length - 1]!.turn) : ''}
               </Text>
-              {jumps(shown, 3).map(j => (
-                <Text wrap="truncate-end">
+              {peaks.map((j, n) => (
+                <Text wrap="truncate-end" hover={{ scope: `peak-${n + 1}`, color: 'claude' }}>
                   {`+${k(j.delta)}`.padStart(6)}
                   <Text dimColor>{`  ${t.turn(j.turn)}  `}</Text>
                   {j.cause ?? t.conversation}
@@ -678,24 +693,6 @@ export const register: Register = on => {
                   {`−${k(Math.max(0, c.before - c.after))}`.padStart(6)}
                   <Text dimColor>{`  ${t.turn(c.turn)}  `}</Text>
                   {t.compactLine(c.trigger === 'manual' ? t.manual : c.trigger === 'auto' ? t.auto : t.plugin, k(c.before), k(c.after))}
-                </Text>
-              ))}
-            </Box>
-          )}
-          <Button key="block-steps" plain label={t.steps} onPress={toggle('block:steps')}>
-            <Text>
-              <Text dimColor>{isOpen('block:steps') ? '▾ ' : '▸ '}</Text>
-              {t.steps}
-            </Text>
-          </Button>
-          {isOpen('block:steps') && (
-            <Box flexDirection="column" paddingLeft={2}>
-              {steps.length === 0 && <Text dimColor>{t.noSteps}</Text>}
-              {steps.map(s => (
-                <Text wrap="truncate-end">
-                  {`+${k(s.tokens)}`.padStart(6)}
-                  {'  '}
-                  <Text dimColor>{s.label}</Text>
                 </Text>
               ))}
             </Box>
