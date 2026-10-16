@@ -48,11 +48,13 @@ From top to bottom:
   turn stands out as a peak. Below it, the five biggest jumps with their cause (point at one
   to light its column), and every compaction.
 
+![Context load chart: the jump under the pointer lit on the chart and opened](assets/en-chart.png)
+
 Click a group to see its items, click an item to get its help page:
 
 | A group | An item |
 |---|---|
-| ![Tool work, item by item](assets/en-group.png) | ![Bash output: what it is, why so much, what to do](assets/en-item.png) |
+| ![Tool work, item by item](assets/en-group.png) | ![Fetched pages: what it is, why so much, what to do](assets/en-item.png) |
 
 The panel speaks English unless Claude Code's `language` setting is Russian.
 
