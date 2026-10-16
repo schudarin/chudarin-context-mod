@@ -219,11 +219,22 @@ export function actionPrices(messages: readonly Message[], lang: Lang): Price[] 
 }
 
 // One line worth acting on, or nothing.
-export function insight(entries: readonly Entry[], fill: number, used: number, lang: Lang): string | null {
+export type Hint = { id: string; text: string; prompt: string | null }
+
+// The biggest entry with advice, if it holds over a tenth of the used context.
+// `hidden`: hints the person acted on or hid this session.
+export function insight(
+  entries: readonly Entry[],
+  fill: number,
+  used: number,
+  lang: Lang,
+  hidden: readonly string[] = [],
+): Hint | null {
   for (const e of entries) {
     const help = helpFor(e.id, lang)
-    if (!help.todo) continue
-    if (used > 0 && e.tokens / used > 0.1) return `${e.label} ${help.took} ${k(e.tokens)}. ${help.todo}`
+    if (!help.todo || hidden.includes(e.id)) continue
+    if (used > 0 && e.tokens / used > 0.1)
+      return { id: e.id, text: `${e.label} ${help.took} ${k(e.tokens)}. ${help.todo}`, prompt: help.prompt }
     return null
   }
   return null

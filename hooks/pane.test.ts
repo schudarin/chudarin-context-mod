@@ -118,3 +118,112 @@ test('every page keeps two empty columns on each side', async ($, on) => {
   await ui.press({ key: 'entry-result:Bash' })
   expect(await padding()).toBe(2)
 })
+
+test('the session title and its start time sit side by side', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  const stored = {
+    startedAt: Date.parse('2026-10-15T09:30:00'),
+    requests: 3,
+    read: 90_000,
+    cached: 80_000,
+    written: 2_000,
+    points: [],
+    compacts: [],
+  }
+  on('store.get', () => ({ value: stored }) as never)
+  on('store.keys', () => ({ value: ['session:test-session'] }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('store.set', () => ({ value: undefined }) as never)
+  on('store.delete', () => ({ value: undefined }) as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  const home = JSON.stringify(await ui.drawn())
+  expect(home).toContain('THIS SESSION')
+  expect(home).toMatch(/"  since /)
+})
+
+test('the context tile compares the pace with past sessions', async ($, on) => {
+  const rising = (from: number, step: number, turns: number) =>
+    Array.from({ length: turns }, (_, i) => ({ tokens: from + i * step, turn: i + 1, cause: null }))
+  const past = { startedAt: 0, requests: 9, read: 0, cached: 0, written: 0, points: rising(10_000, 1000, 8), compacts: [] }
+  const logs: Record<string, unknown> = {
+    'session:a': past,
+    'session:b': past,
+    'session:c': past,
+    'session:test-session': { ...past, points: rising(5_000, 3000, 5) },
+  }
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('store.get', (_$, e) => ({ value: logs[e.key] }) as never)
+  on('store.keys', () => ({ value: Object.keys(logs) }) as never)
+  on('store.set', () => ({ value: undefined }) as never)
+  on('store.delete', () => ({ value: undefined }) as never)
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  expect(JSON.stringify(await ui.drawn())).toContain('🚀 context grows 3× faster than usual')
+})
+
+for (const button of ['hint-fill', 'hint-hide'] as const) {
+  test(`the hint goes away after ${button}`, async ($, on) => {
+    const bigBash = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'npm test' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'o'.repeat(40_000) }] },
+    ]
+    const filled: string[] = []
+    const categories = [
+      { name: 'Skills', tokens: 1_000, color: 'warning', isDeferred: false, kind: 'used' },
+      { name: 'Messages', tokens: 19_000, color: 'x', isDeferred: false, kind: 'used' },
+      { name: 'Free space', tokens: 980_000, color: 'x', isDeferred: false, kind: 'free' },
+    ]
+    const bashHeavy = { ...usage, context: { ...usage.context, breakdown: { ...usage.context.breakdown, categories } } }
+    on('session.usage', () => ({ value: bashHeavy }) as never)
+    on('session.messages', () => ({ value: bigBash }) as never)
+    on('session.measure', (_$, e) => ({ changed: e.changed }))
+    on('settings.read', () => ({ value: { language: 'English' } }) as never)
+    on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+    on('session.id', () => ({ value: 'test-session' }) as never)
+    on('prompt.read', () => ({ value: { text: '', cursor: 0 } }) as never)
+    on('prompt.fill', (_$, e) => {
+      filled.push(e.text)
+      return { isFilled: true }
+    })
+    await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+    const ui = await $.ui.mount({
+      plugin: 'chudarin-context-mod',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'chudarin-context-mod',
+      props: props as never,
+    })
+    expect(JSON.stringify(await ui.drawn())).toContain('Bash output took')
+    await ui.press({ key: button })
+    expect(JSON.stringify(await ui.drawn())).not.toContain('Bash output took')
+    expect(filled).toEqual(button === 'hint-fill' ? ['From now on, run tests and go through long logs in a subagent, and bring back only the summary.'] : [])
+  })
+}

@@ -6,7 +6,7 @@ import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } 
 import { helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, windowRows } from './model'
+import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, speed, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
@@ -16,6 +16,8 @@ const expanded = atom({ plugin: 'chudarin-context-mod', key: 'expanded' } as con
 const page = atom({ plugin: 'chudarin-context-mod', key: 'page' } as const, { kind: 'home' } as Page)
 const bandOn = atom({ plugin: 'chudarin-context-mod', key: 'bandOn' } as const, false)
 const lang = atom({ plugin: 'chudarin-context-mod', key: 'lang' } as const, 'en' as Lang)
+const usual = atom({ plugin: 'chudarin-context-mod', key: 'usual' } as const, null)
+const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, [])
 
 const PANE = 'chudarin-context-mod'
 // Session logs kept in the store; older ones are dropped.
@@ -96,6 +98,15 @@ export const register: Register = on => {
     const now = await $.clock.now()
     await update($, log, () => stored ?? emptyLog(now))
     for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
+    // The usual pace, from the other sessions in the store.
+    const others: SessionLog[] = []
+    for (const key of await $.store.keys())
+      if (key.startsWith('session:') && key !== sessionKey(id)) {
+        const other = (await $.store.get(key)) as SessionLog | undefined
+        if (other) others.push(other)
+      }
+    await update($, usual, () => usualRise(others))
+    await update($, hidden, () => [])
     const { context } = await $.session.usage()
     if (context.tokens !== undefined && !stored?.points.length) {
       const tokens = context.tokens
@@ -236,6 +247,13 @@ export const register: Register = on => {
           <Text dimColor>{right.padStart(Math.max(1, edge - title.length))}</Text>
         </Text>
       )
+      // A title with a note right after it, for a note that reads with the title.
+      const titleNote = (title: string, note: string) => (
+        <Text>
+          <Text bold>{title.toUpperCase()}</Text>
+          <Text dimColor>{`  ${note}`}</Text>
+        </Text>
+      )
 
       // ---- entry page: what it is, why so much, what to do ----
       if (where.kind === 'entry') {
@@ -366,7 +384,16 @@ export const register: Register = on => {
         usedGroups.map(g => g.tokens),
         W - (usedGroups.length - 1),
       )
-      const hint = insight(snap.entries, fill, snap.used, snap.lang)
+      const hint = insight(snap.entries, fill, snap.used, snap.lang, await read($, hidden))
+      const hide = (id: string) => update($, hidden, prev => [...prev, id])
+      // Adds the request after whatever the person has typed, then hides the hint.
+      const putInChat = (h: { id: string; prompt: string | null }) => async () => {
+        if (!h.prompt) return
+        const draft = (await $.prompt.read()).text
+        await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
+        await hide(h.id)
+      }
+      const tempo = speed(points, await read($, usual))
       const prices = snap.prices.slice(0, 6)
       const half = Math.ceil(prices.length / 2)
       const priceW = Math.floor((W - 4) / 2)
@@ -410,6 +437,7 @@ export const register: Register = on => {
               <Text dimColor>{tiles.map((t, i) => cell(t.lines[row] ?? '', i)).join('')}</Text>
             ) : null,
           )}
+          {tempo && <Text>{t.speed(tempo.kind, tempo.ratio)}</Text>}
           {sectionGap}
 
           {/* what fills the window */}
@@ -443,12 +471,26 @@ export const register: Register = on => {
           {hint && (
             <Box flexDirection="column">
               <Text> </Text>
-              <Text>
+              {/* the arrow in its own column, so wrapped lines line up with the buttons */}
+              <Box flexDirection="row">
                 <Text bold color="claude">
                   →{' '}
                 </Text>
-                {hint}
-              </Text>
+                <Box flexDirection="column" flexShrink={1}>
+                  <Text>{hint.text}</Text>
+                </Box>
+              </Box>
+              <Box flexDirection="row" paddingLeft={2}>
+                {hint.prompt && (
+                  <Button key="hint-fill" plain label={t.hintFill} onPress={putInChat(hint)}>
+                    <Text color="claude">{t.hintFill}</Text>
+                  </Button>
+                )}
+                {hint.prompt && <Text>{'   '}</Text>}
+                <Button key="hint-hide" plain label={t.hintHide} onPress={() => hide(hint.id)}>
+                  <Text dimColor>{t.hintHide}</Text>
+                </Button>
+              </Box>
             </Box>
           )}
           {sectionGap}
@@ -474,7 +516,7 @@ export const register: Register = on => {
           {/* the whole session, compactions included */}
           {session && session.requests > 0 && (
             <Box flexDirection="column">
-              {titleRow(t.session, t.since(resetLabel(new Date(session.startedAt).toISOString(), now)))}
+              {titleNote(t.session, t.since(resetLabel(new Date(session.startedAt).toISOString(), now)))}
               <Text>
                 {t.readByModel.padEnd(NAME)}
                 {k(session.read).padStart(NUM)}

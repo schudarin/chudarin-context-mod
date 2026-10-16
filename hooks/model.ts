@@ -87,6 +87,40 @@ export function pace(points: readonly Point[]): { recent: number; overall: numbe
   return { recent: mean(rises.slice(-5)), overall: mean(rises) }
 }
 
+// How much the context grew each turn; drops (compactions) are left out.
+function rises(points: readonly { tokens: number }[]): number[] {
+  const out: number[] = []
+  for (let i = 1; i < points.length; i++) {
+    const d = points[i]!.tokens - points[i - 1]!.tokens
+    if (d > 0) out.push(d)
+  }
+  return out
+}
+
+function median(xs: readonly number[]): number {
+  const s = [...xs].sort((a, b) => a - b)
+  const mid = Math.floor(s.length / 2)
+  return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2
+}
+
+// The usual rise per turn: the median, over past sessions, of each one's median rise.
+// Medians, so one session full of screenshots doesn't set the norm.
+export function usualRise(logs: readonly { points: readonly { tokens: number }[] }[]): number | null {
+  const perSession = logs.map(l => rises(l.points)).filter(r => r.length >= 5).map(median)
+  return perSession.length >= 3 ? median(perSession) : null
+}
+
+export type SpeedKind = 'snail' | 'cat' | 'rabbit' | 'rocket'
+
+// The last few turns against the usual pace.
+export function speed(points: readonly Point[], usual: number | null): { kind: SpeedKind; ratio: number } | null {
+  const recent = rises(points).slice(-5)
+  if (!usual || recent.length < 3) return null
+  const ratio = Math.round((median(recent) / usual) * 100) / 100
+  const kind: SpeedKind = ratio < 0.67 ? 'snail' : ratio < 1.5 ? 'cat' : ratio < 2 ? 'rabbit' : 'rocket'
+  return { kind, ratio }
+}
+
 // The biggest rises from one turn to the next, with what likely caused them.
 export function jumps(points: readonly Point[], n: number): { delta: number; turn: number; cause: string | null }[] {
   const out: { delta: number; turn: number; cause: string | null }[] = []

@@ -8,9 +8,12 @@ type Text = {
   what: string
   // What the person can do about it; null when nothing can be done.
   todo: string | null
+  // What the hint's button puts in the prompt box: a request to Claude or a command.
+  prompt?: string
 }
 
-export type Help = Text & {
+export type Help = Omit<Text, 'prompt'> & {
+  prompt: string | null
   group: GroupId
   // The insight sentence: "<label> <took> <tokens>. <todo>"
   took: string
@@ -24,6 +27,9 @@ type Entry = {
   en: Text
 }
 
+const WEB_RU = 'Дальше ищи в интернете и читай страницы в субагенте, в чат возвращай только итог.'
+const WEB_EN = 'From now on, search the web and read pages in a subagent, and bring back only the summary.'
+
 const HELP: Record<string, Entry> = {
   'result:Bash': {
     group: 'tools',
@@ -31,12 +37,14 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Вывод команд Bash',
       what: 'Всё, что напечатали команды, которые я запускал: тесты, сборка, поиск, git. Вывод остаётся в контексте до конца сессии.',
-      todo: 'Пиши длинный вывод в файл и читай нужное.',
+      todo: 'Проси Claude запускать тесты и разбирать длинные логи в субагенте: в чат вернётся только итог.',
+      prompt: 'Дальше запускай тесты и разбирай длинные логи в субагенте, в чат возвращай только итог.',
     },
     en: {
       label: 'Bash output',
       what: 'Everything the commands Claude ran printed: tests, builds, searches, git. The output stays in the context until the session ends.',
-      todo: 'Send long output to a file and read only what you need.',
+      todo: 'Ask Claude to run tests and go through long logs in a subagent: only the summary comes back.',
+      prompt: 'From now on, run tests and go through long logs in a subagent, and bring back only the summary.',
     },
   },
   'result:Read': {
@@ -45,19 +53,19 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Прочитанные файлы',
       what: 'Содержимое файлов, которые я прочитал. Файл остаётся в контексте целиком, даже если нужна была пара строк.',
-      todo: 'Читай файлы частями или ищи нужное поиском.',
+      todo: 'Называй в задаче файл и функцию: чем точнее просьба, тем меньше Claude читает.',
     },
     en: {
       label: 'Files read',
       what: 'The contents of files Claude read. A whole file stays in the context even when only a few lines were needed.',
-      todo: 'Read files in parts, or search for what you need.',
+      todo: 'Name the file and function in your request: the more precise it is, the less Claude reads.',
     },
   },
   'result:WebSearch': {
     group: 'tools',
     took: 'занял',
-    ru: { label: 'Поиск в вебе', what: 'Результаты поиска в интернете: заголовки, ссылки, выдержки.', todo: 'Ищи точнее: один запрос вместо нескольких.' },
-    en: { label: 'Web search', what: 'Web search results: titles, links, snippets.', todo: 'Search more precisely: one query instead of several.' },
+    ru: { label: 'Поиск в вебе', what: 'Результаты поиска в интернете: заголовки, ссылки, выдержки.', todo: 'Проси Claude искать в интернете и читать страницы в субагенте: в чат вернётся только итог.', prompt: WEB_RU },
+    en: { label: 'Web search', what: 'Web search results: titles, links, snippets.', todo: 'Ask Claude to search the web and read pages in a subagent: only the summary comes back.', prompt: WEB_EN },
   },
   'result:WebFetch': {
     group: 'tools',
@@ -65,25 +73,27 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Загруженные страницы',
       what: 'Веб-страницы, которые я загрузил и пересказал в текст.',
-      todo: 'Проси выжимку нужного раздела, а не всю страницу.',
+      todo: 'Проси Claude искать в интернете и читать страницы в субагенте: в чат вернётся только итог.',
+      prompt: WEB_RU,
     },
     en: {
       label: 'Fetched pages',
       what: 'Web pages Claude fetched and turned into text.',
-      todo: 'Ask for the section you need, not the whole page.',
+      todo: 'Ask Claude to search the web and read pages in a subagent: only the summary comes back.',
+      prompt: WEB_EN,
     },
   },
   'result:Grep': {
     group: 'tools',
     took: 'занял',
-    ru: { label: 'Поиск по файлам', what: 'Найденные строки и пути файлов.', todo: 'Сужай поиск папкой или шаблоном.' },
-    en: { label: 'File search', what: 'Matching lines and file paths.', todo: 'Narrow the search to a folder or a pattern.' },
+    ru: { label: 'Поиск по файлам', what: 'Найденные строки и пути файлов.', todo: 'Называй в задаче файл и функцию: чем точнее просьба, тем меньше Claude читает.' },
+    en: { label: 'File search', what: 'Matching lines and file paths.', todo: 'Name the file and function in your request: the more precise it is, the less Claude reads.' },
   },
   'result:Glob': {
     group: 'tools',
     took: 'заняли',
-    ru: { label: 'Списки файлов', what: 'Пути файлов, найденные по шаблону.', todo: 'Сужай шаблон.' },
-    en: { label: 'File lists', what: 'File paths matched by a pattern.', todo: 'Narrow the pattern.' },
+    ru: { label: 'Списки файлов', what: 'Пути файлов, найденные по шаблону.', todo: 'Называй в задаче файл и функцию: чем точнее просьба, тем меньше Claude читает.' },
+    en: { label: 'File lists', what: 'File paths matched by a pattern.', todo: 'Name the file and function in your request: the more precise it is, the less Claude reads.' },
   },
   'result:Agent': {
     group: 'tools',
@@ -117,12 +127,12 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Код, который я написал',
       what: 'Содержимое файлов, которые я создал или поправил через Write и Edit. Я отправляю текст целиком, и он остаётся в контексте.',
-      todo: 'Проси точечные правки вместо переписывания файла целиком.',
+      todo: null,
     },
     en: {
       label: 'Code Claude wrote',
       what: 'The contents of files Claude created or changed with Write and Edit. The text is sent in full and stays in the context.',
-      todo: 'Ask for targeted edits instead of rewriting whole files.',
+      todo: null,
     },
   },
   args: {
@@ -137,12 +147,12 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Служебные вставки',
       what: 'Сообщения, которые Claude Code сам добавляет в разговор: список скиллов, изменения в файлах, состояние задач, подсказки хуков. Чем длиннее сессия, тем их больше.',
-      todo: 'Под новую задачу начинай новую сессию.',
+      todo: null,
     },
     en: {
       label: 'System reminders',
       what: 'Messages Claude Code adds to the conversation on its own: the skill list, file changes, task state, hook notes. The longer the session, the more of them.',
-      todo: 'Start a new session for a new task.',
+      todo: null,
     },
   },
   'skills-loaded': {
@@ -151,12 +161,12 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Загруженные скиллы',
       what: 'Полный текст скиллов, которые я вызвал. Скилл остаётся в контексте до конца сессии.',
-      todo: 'Вызывай скиллы, только когда они нужны.',
+      todo: null,
     },
     en: {
       label: 'Loaded skills',
       what: 'The full text of skills Claude invoked. A skill stays in the context until the session ends.',
-      todo: 'Invoke skills only when you need them.',
+      todo: null,
     },
   },
   images: {
@@ -165,12 +175,12 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Скриншоты и картинки',
       what: 'Картинки, которые ты прислал или вернули инструменты. Вес оценён грубо: 1.5k за штуку.',
-      todo: 'Обрезай скриншот до нужного или присылай текст ошибки.',
+      todo: null,
     },
     en: {
       label: 'Screenshots and images',
       what: 'Images you sent or tools returned. The weight is a rough guess: 1.5k each.',
-      todo: 'Crop screenshots to what matters, or paste the error text.',
+      todo: null,
     },
   },
   user: {
@@ -182,14 +192,14 @@ const HELP: Record<string, Entry> = {
   assistant: {
     group: 'chat',
     took: 'заняли',
-    ru: { label: 'Мои ответы', what: 'Текст моих ответов тебе.', todo: 'Проси отвечать короче, если ответы длинные.' },
-    en: { label: "Claude's replies", what: "The text of Claude's replies to you.", todo: 'Ask for shorter replies if they run long.' },
+    ru: { label: 'Мои ответы', what: 'Текст моих ответов тебе.', todo: null },
+    en: { label: "Claude's replies", what: "The text of Claude's replies to you.", todo: null },
   },
   thinking: {
     group: 'chat',
     took: 'заняли',
-    ru: { label: 'Мои рассуждения', what: 'Мои рассуждения перед ответом, которые возвращаются в контекст.', todo: null },
-    en: { label: "Claude's thinking", what: 'Reasoning before a reply that goes back into the context.', todo: null },
+    ru: { label: 'Мои рассуждения', what: 'Мои рассуждения перед ответом, которые возвращаются в контекст.', todo: 'На простых задачах снижай /effort: рассуждений станет меньше.', prompt: '/effort' },
+    en: { label: "Claude's thinking", what: 'Reasoning before a reply that goes back into the context.', todo: 'Lower /effort on simple tasks: Claude will reason less.', prompt: '/effort' },
   },
   'cat:System prompt': {
     group: 'service',
@@ -217,9 +227,12 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Схемы MCP-инструментов',
       what: 'Описания подгруженных инструментов MCP-серверов.',
-      todo: 'Отключай MCP-серверы, которыми не пользуешься.',
+      todo: 'Отключи ненужные серверы в /mcp. Где есть CLI вроде gh, он не занимает контекст описаниями инструментов.',
+      prompt: '/mcp',
     },
-    en: { label: 'MCP tool schemas', what: 'Descriptions of loaded MCP server tools.', todo: "Turn off MCP servers you don't use." },
+    en: { label: 'MCP tool schemas', what: 'Descriptions of loaded MCP server tools.', todo: "Turn off servers you don't use in /mcp. Where a CLI like gh exists, it adds no tool descriptions to the context.",
+      prompt: '/mcp',
+    },
   },
   'cat:MCP server instructions': {
     group: 'service',
@@ -227,12 +240,14 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'Инструкции MCP-серверов',
       what: 'Правила, которые MCP-серверы добавляют в начало сессии.',
-      todo: 'Отключай MCP-серверы, которыми не пользуешься.',
+      todo: 'Отключи ненужные серверы в /mcp. Где есть CLI вроде gh, он не занимает контекст описаниями инструментов.',
+      prompt: '/mcp',
     },
     en: {
       label: 'MCP server instructions',
       what: 'Rules MCP servers add at the start of a session.',
-      todo: "Turn off MCP servers you don't use.",
+      todo: "Turn off servers you don't use in /mcp. Where a CLI like gh exists, it adds no tool descriptions to the context.",
+      prompt: '/mcp',
     },
   },
   'cat:Custom agents': {
@@ -247,12 +262,14 @@ const HELP: Record<string, Entry> = {
     ru: {
       label: 'CLAUDE.md и память',
       what: 'Твои файлы инструкций: CLAUDE.md и индекс памяти. Загружаются в каждую сессию.',
-      todo: 'Держи CLAUDE.md коротким, детали выноси в отдельные файлы.',
+      todo: 'Держи CLAUDE.md до 200 строк, инструкции для отдельных процессов перенеси в скиллы: они загружаются, только когда нужны.',
+      prompt: 'Сократи CLAUDE.md до 200 строк: инструкции для отдельных процессов вынеси в скиллы.',
     },
     en: {
       label: 'CLAUDE.md and memory',
       what: 'Your instruction files: CLAUDE.md and the memory index. Loaded into every session.',
-      todo: 'Keep CLAUDE.md short; move details into separate files.',
+      todo: 'Keep CLAUDE.md under 200 lines; move instructions for specific workflows into skills, which load only when needed.',
+      prompt: 'Trim CLAUDE.md to under 200 lines: move instructions for specific workflows into skills.',
     },
   },
   'cat:Skills': {
@@ -273,7 +290,12 @@ const HELP: Record<string, Entry> = {
 
 export const HELP_IDS = Object.keys(HELP)
 
-const flat = (e: Entry, lang: Lang): Help => ({ ...e[lang], group: e.group, took: lang === 'ru' ? e.took : 'took' })
+const flat = (e: Entry, lang: Lang): Help => ({
+  ...e[lang],
+  prompt: e[lang].prompt ?? null,
+  group: e.group,
+  took: lang === 'ru' ? e.took : 'took',
+})
 
 export function helpFor(id: string, lang: Lang): Help {
   const known = HELP[id]
@@ -287,9 +309,9 @@ export function helpFor(id: string, lang: Lang): Help {
         ru: {
           label: `Ответы MCP ${server}`,
           what: `Данные, которые вернул MCP-сервер ${server}.`,
-          todo: 'Проси у сервера меньше полей или меньше строк.',
+          todo: null,
         },
-        en: { label: `MCP ${server} replies`, what: `Data the ${server} MCP server returned.`, todo: 'Ask the server for fewer fields or rows.' },
+        en: { label: `MCP ${server} replies`, what: `Data the ${server} MCP server returned.`, todo: null },
       },
       lang,
     )

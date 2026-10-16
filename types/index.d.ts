@@ -50,6 +50,10 @@ declare module 'claude-code' {
       page: Page
       bandOn: boolean
       lang: 'ru' | 'en'
+      // The usual context rise per turn over past sessions; null until there are enough.
+      usual: number | null
+      // Hints acted on or hidden this session, by entry id.
+      hidden: string[]
     }
   }
 }

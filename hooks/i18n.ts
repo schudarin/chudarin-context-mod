@@ -2,6 +2,11 @@
 
 export type Lang = 'ru' | 'en'
 
+type SpeedKind = 'snail' | 'cat' | 'rabbit' | 'rocket'
+const ICON: Record<SpeedKind, string> = { snail: '🐌', cat: '🐈', rabbit: '🐇', rocket: '🚀' }
+// How many times faster or slower, to one decimal: 1.74 → 1.7, 0.5 → 2.
+const times = (ratio: number) => Math.round((ratio >= 1 ? ratio : 1 / ratio) * 10) / 10
+
 export function langOf(setting: unknown): Lang {
   return typeof setting === 'string' && /^(ru|russian|русск)/i.test(setting.trim()) ? 'ru' : 'en'
 }
@@ -32,6 +37,14 @@ const ru = {
   tileWeek: 'ЛИМИТ НЕДЕЛЯ',
   ofWindow: (used: string, window: string) => `${used} из ${window}`,
   turnsLeft: (n: number) => `хватит на ~${n} ходов`,
+  hintFill: 'Вставить в чат',
+  hintHide: 'Скрыть',
+  speed: (kind: SpeedKind, ratio: number) => {
+    if (kind === 'cat') return `${ICON.cat} контекст растёт как обычно`
+    const x = times(ratio)
+    const word = Number.isInteger(x) && x >= 5 ? 'раз' : 'раза'
+    return `${ICON[kind]} контекст растёт в ${String(x).replace('.', ',')} ${word} ${kind === 'snail' ? 'медленнее' : 'быстрее'} обычного`
+  },
   resets: (at: string) => `сброс ${at}`,
   whatFills: 'Чем занят контекст',
   prices: 'Сколько стоит действие',
@@ -100,6 +113,12 @@ const en: typeof ru = {
   tileWeek: 'WEEKLY LIMIT',
   ofWindow: (used, window) => `${used} of ${window}`,
   turnsLeft: n => `about ${n} turns left`,
+  hintFill: 'Put in chat',
+  hintHide: 'Hide',
+  speed: (kind, ratio) =>
+    kind === 'cat'
+      ? `${ICON.cat} context grows at your usual pace`
+      : `${ICON[kind]} context grows ${times(ratio)}× ${kind === 'snail' ? 'slower' : 'faster'} than usual`,
   resets: at => `resets ${at}`,
   whatFills: 'What fills the context',
   prices: 'What an action costs',

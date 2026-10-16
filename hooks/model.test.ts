@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, detailsFor, jumps, k, kind, label, pace, resetLabel, shorten, sparkline, windowRows } from './model'
+import { chartRows, detailsFor, jumps, k, kind, label, pace, resetLabel, shorten, speed, sparkline, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
 
@@ -117,4 +117,24 @@ test('resetLabel shows a time today and a date otherwise', () => {
   const now = Date.parse('2026-10-15T12:00:00')
   expect(resetLabel('2026-10-15T18:40:00', now)).toBe('18:40')
   expect(resetLabel('2026-10-18T09:05:00', now)).toBe('18.10 09:05')
+})
+
+// A session whose context rises by `step` every turn.
+const steady = (step: number, turns = 8) => ({ points: Array.from({ length: turns }, (_, i) => pt(10_000 + i * step, i + 1)) })
+
+test('usualRise needs three sessions with enough turns, and ignores compaction drops', () => {
+  expect(usualRise([steady(1000), steady(1000)])).toBe(null)
+  expect(usualRise([steady(1000), steady(1000), steady(1000, 3)])).toBe(null)
+  expect(usualRise([steady(1000), steady(2000), steady(3000)])).toBe(2000)
+  const compacted = { points: [...steady(1000).points, pt(5_000, 9), pt(6_000, 10)] }
+  expect(usualRise([compacted, steady(1000), steady(1000)])).toBe(1000)
+})
+
+test('speed compares the last turns with the usual pace', () => {
+  expect(speed(steady(1000).points, null)).toBe(null)
+  expect(speed(steady(1000, 3).points, 1000)).toBe(null)
+  expect(speed(steady(400).points, 1000)).toEqual({ kind: 'snail', ratio: 0.4 })
+  expect(speed(steady(1000).points, 1000)).toEqual({ kind: 'cat', ratio: 1 })
+  expect(speed(steady(1700).points, 1000)).toEqual({ kind: 'rabbit', ratio: 1.7 })
+  expect(speed(steady(3000).points, 1000)).toEqual({ kind: 'rocket', ratio: 3 })
 })
