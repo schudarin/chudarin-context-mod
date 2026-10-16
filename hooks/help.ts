@@ -1,7 +1,7 @@
 // Plain-language names and help for every kind of entry the dashboard shows, in Russian and English.
-import type { Lang } from './i18n'
+import type { GroupId } from '../types'
 
-export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
+import type { Lang } from './i18n'
 
 type Text = {
   label: string
@@ -12,7 +12,7 @@ type Text = {
   prompt?: string
 }
 
-export type Help = Omit<Text, 'prompt'> & {
+type Help = Omit<Text, 'prompt'> & {
   prompt: string | null
   group: GroupId
   // The insight sentence: "<label> <took> <tokens>. <todo>"

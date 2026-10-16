@@ -1,14 +1,14 @@
 // Turns /context categories and the conversation into the dashboard's groups and entries.
-import type { Category, Item } from '../types'
+import type { Category, GroupId, Item } from '../types'
 
-import { type GroupId, helpFor } from './help'
+import { helpFor } from './help'
 import { type Lang, type Strings, UI } from './i18n'
 import { IMAGE_TOKENS, type Message, k, kind, label } from './model'
 
-export type Call = { label: string; tokens: number }
-export type Entry = { id: string; label: string; group: GroupId; tokens: number; count: number; top: Call[] }
-export type GroupTotal = { id: GroupId; label: string; color: string; tokens: number }
-export type Price = { name: string; count: number; average: number }
+type Call = { label: string; tokens: number }
+type Entry = { id: string; label: string; group: GroupId; tokens: number; count: number; top: Call[] }
+type GroupTotal = { id: GroupId; label: string; color: string; tokens: number }
+type Price = { name: string; count: number; average: number }
 
 // Fixed order: a group keeps its color whatever its size. Blue, orange, aqua, violet from the
 // dataviz categorical palette, aqua and violet a step darker so one set works on any terminal:
@@ -219,13 +219,12 @@ export function actionPrices(messages: readonly Message[], lang: Lang): Price[] 
 }
 
 // One line worth acting on, or nothing.
-export type Hint = { id: string; text: string; prompt: string | null }
+type Hint = { id: string; text: string; prompt: string | null }
 
 // The biggest entry with advice, if it holds over a tenth of the used context.
-// `hidden`: hints the person acted on or hid this session.
+// `hidden`: advice the person sent, ran, hid or muted.
 export function insight(
   entries: readonly Entry[],
-  fill: number,
   used: number,
   lang: Lang,
   hidden: readonly string[] = [],

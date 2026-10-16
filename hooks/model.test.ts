@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, detail, detailsFor, fitCell, nameWidth, priceGrid, wrapLines, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { chartRows, clip, detail, detailsFor, fitCell, joinLines, nameWidth, priceGrid, wrapLines, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
 
@@ -192,4 +192,20 @@ test('nameWidth leaves room for the numbers, between 12 and 30', () => {
   expect(nameWidth(100)).toBe(30)
   expect(nameWidth(36)).toBe(19)
   expect(nameWidth(20)).toBe(12)
+  // Group rows keep room for a bar.
+  expect(nameWidth(36, 4)).toBe(15)
+  expect(nameWidth(100, 4)).toBe(30)
+})
+
+test('clip cuts a name to its column with an ellipsis, and leaves a short one alone', () => {
+  expect(clip('Работа инструментов', 10)).toBe('Работа ин…')
+  expect(clip('Скиллы', 10)).toBe('Скиллы')
+})
+
+test('joinLines joins parts with a dot and wraps them; a line never starts with the dot', () => {
+  expect(joinLines(['25k of 1M', 'about 195 turns left'], 36)).toEqual(['25k of 1M · about 195 turns left'])
+  expect(joinLines(['resets 19:00', 'about 1 h 10 min left'], 16)).toEqual(['resets 19:00 ·', 'about 1 h 10 min', 'left'])
+  // Empty parts leave no stray dot.
+  expect(joinLines(['resets 19:00', ''], 36)).toEqual(['resets 19:00'])
+  expect(joinLines(['', ''], 36)).toEqual([])
 })

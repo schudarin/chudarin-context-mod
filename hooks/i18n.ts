@@ -1,8 +1,9 @@
 // Interface strings in Russian and English. The language follows Claude Code's `language` setting.
 
+import type { SpeedKind } from './model'
+
 export type Lang = 'ru' | 'en'
 
-type SpeedKind = 'snail' | 'cat' | 'rabbit' | 'rocket'
 const ICON: Record<SpeedKind, string> = { snail: '🐌', cat: '🐈', rabbit: '🐇', rocket: '🚀' }
 // Minutes, rounded for a forecast: to 5 under an hour, to 10 above.
 const roundMinutes = (m: number) => (m < 60 ? Math.max(5, Math.round(m / 5) * 5) : Math.round(m / 10) * 10)
@@ -39,7 +40,6 @@ const ru = {
   panelOpened: 'Панель открыта. Esc или /ctx закрывает.',
   paneTitle: 'Контекст',
   noData: 'Нет данных до первого ответа.',
-  renderFailed: 'отрисовка упала',
   back: '← Назад',
   entryGone: 'Этого пункта сейчас нет в контексте.',
   whatIs: 'Что это',
@@ -56,7 +56,7 @@ const ru = {
   tileWeek: 'ЛИМИТ НЕДЕЛЯ',
   ofWindow: (used: string, window: string) => `${used} из ${window}`,
   turnsLeft: (n: number) => `хватит на ~${n} ходов`,
-  limitLeft: (minutes: number) => `хватит на ~${duration(minutes, 'ч', 'мин')}`,
+  limitLeft: (minutes: number) => (minutes <= 0 ? 'лимит на исходе' : `хватит на ~${duration(minutes, 'ч', 'мин')}`),
   limitUntilReset: 'хватит до сброса',
   hintFill: 'Вставить в чат',
   hintHide: 'Скрыть',
@@ -117,7 +117,6 @@ const en: typeof ru = {
   panelOpened: 'Panel open. Esc or /ctx closes it.',
   paneTitle: 'Context',
   noData: 'No data until the first reply.',
-  renderFailed: 'drawing failed',
   back: '← Back',
   entryGone: 'This item is not in the context right now.',
   whatIs: 'What it is',
@@ -134,7 +133,7 @@ const en: typeof ru = {
   tileWeek: 'WEEKLY LIMIT',
   ofWindow: (used, window) => `${used} of ${window}`,
   turnsLeft: n => `about ${n} turns left`,
-  limitLeft: minutes => `about ${duration(minutes, 'h', 'min')} left`,
+  limitLeft: minutes => (minutes <= 0 ? 'about to run out' : `about ${duration(minutes, 'h', 'min')} left`),
   limitUntilReset: 'lasts until reset',
   hintFill: 'Put in chat',
   hintHide: 'Hide',

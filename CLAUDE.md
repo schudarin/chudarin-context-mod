@@ -33,8 +33,6 @@ On the maintainer's machine the dev copy loads via `CLAUDE_CODE_PLUGIN_DIRS`; do
 
 ## Still open
 
-- Before handing the mod to anyone: bump the version in `.claude-plugin/plugin.json` (still 0.1.0).
-  README screenshots were retaken in both languages on 2026-10-16.
-- Not checked live: running `/mcp` marks the MCP advice as done (needs the MCP hint to show first).
-- Untested surfaces: desktop (tests only), VS Code, mobile.
+- Version 1.0.0 since 2026-10-16; README screenshots retaken in both languages the same day.
+- Checked live: terminal and the desktop app (macOS, 2026-10-16). Untested: VS Code, mobile.
 - Mods API is early access; README says "built and tested on Claude Code 2.1.300".

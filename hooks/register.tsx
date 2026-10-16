@@ -6,7 +6,7 @@ import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } 
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, detail, detailsFor, fitCell, nameWidth, priceGrid, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { chartRows, clip, detail, detailsFor, fitCell, joinLines, nameWidth, priceGrid, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
@@ -20,6 +20,7 @@ const sent = atom({ plugin: 'chudarin-context-mod', key: 'sent' } as const, [])
 const muted = atom({ plugin: 'chudarin-context-mod', key: 'muted' } as const, [])
 const limitTrack = atom({ plugin: 'chudarin-context-mod', key: 'limitTrack' } as const, null)
 const minute = atom({ plugin: 'chudarin-context-mod', key: 'minute' } as const, 0)
+const logId = atom({ plugin: 'chudarin-context-mod', key: 'logId' } as const, null)
 // Store key for the 5-hour limit samples: the limit is shared by every session.
 const LIMIT = 'limit:five_hour'
 
@@ -31,9 +32,15 @@ function isTrack(v: unknown): v is LimitTrack {
 // One more sample of the 5-hour limit. The store is merged in, so every session adds to one track.
 async function sampleLimit($: EngineInterface, resetsAt: string, percent: number) {
   const now = await $.clock.now()
+  // A window already over is an idle session's old figure: it must not start the track over.
+  if (Date.parse(resetsAt) <= now) return
   const stored = await $.store.get(LIMIT).catch(() => undefined)
   const own = await read($, limitTrack)
-  const base = isTrack(stored) && (!own || stored.samples.length >= own.samples.length) ? stored : own
+  // The newest window wins; in the same window, the track with more samples.
+  const [base = null] = [stored, own]
+    .filter(isTrack)
+    .sort((a, b) => Date.parse(b.resetsAt) - Date.parse(a.resetsAt) || b.samples.length - a.samples.length)
+  if (base && Date.parse(resetsAt) < Date.parse(base.resetsAt)) return
   const next = trackLimit(base, resetsAt, now, percent)
   await update($, limitTrack, () => next)
   await $.store.set(LIMIT, next).catch(err => $.ui.log(`chudarin-context-mod: limit samples not saved: ${String(err)}`))
@@ -44,6 +51,8 @@ const MUTED = 'muted'
 // Marks advice as done once its request was sent or its command run: what counts is
 // what reached Claude, not what the panel put in the box.
 async function markDone($: EngineInterface, matches: (prompt: string) => boolean) {
+  // The first message after a /clear belongs to the new session: switch before marking.
+  await followSession($)
   const ids = HELP_IDS.filter(id => (['ru', 'en'] as const).some(l => {
     const p = helpFor(id, l).prompt
     return p !== null && matches(p)
@@ -59,6 +68,9 @@ const STALE_MS = 5 * 60_000
 // Session logs kept in the store; older ones are dropped.
 const KEEP_SESSIONS = 30
 const CHART_ROWS = 6
+// Content narrower than this stacks each row that holds a name and figures into two lines:
+// the name, then the figures under it, indented 2.
+const COMPACT = 48
 // Lower blocks keep a gap between stacked rows; a dim dot marks the empty part of a meter.
 const BLOCK = '▆'
 const EMPTY = '·'
@@ -84,9 +96,30 @@ function widths(values: readonly number[], width: number): number[] {
   return out
 }
 
-// Change the session log in the panel's state and persist it, so a restart or --resume keeps it.
-async function saveLog($: EngineInterface, change: (l: SessionLog) => SessionLog) {
+// Load session `id`'s log, or start one. What was sent or hidden belonged to the session before.
+async function loadSession($: EngineInterface, id: string): Promise<SessionLog | undefined> {
+  // An unreadable store starts an empty log, as a missing one does.
+  const stored = (await $.store.get(sessionKey(id)).catch(() => undefined)) as SessionLog | undefined
+  const now = await $.clock.now()
+  // Logs from older versions lack newer fields; the empty log fills them in.
+  await update($, log, () => (stored ? { ...emptyLog(stored.startedAt), ...stored } : emptyLog(now)))
+  await update($, hidden, () => [])
+  await update($, sent, () => [])
+  await update($, logId, () => id)
+  return stored
+}
+
+// /clear and a resume inside the process go on under a new session id, and no session.start
+// fires: the first write after one loads the new id's log.
+async function followSession($: EngineInterface): Promise<string> {
   const id = await $.session.id()
+  if ((await read($, logId)) !== id) await loadSession($, id)
+  return id
+}
+
+// Change the session log in the panel's state and persist it, so a restart or `claude --resume` keeps it.
+async function saveLog($: EngineInterface, change: (l: SessionLog) => SessionLog) {
+  const id = await followSession($)
   const now = await $.clock.now()
   let next: SessionLog | null = null
   await update($, log, prev => (next = change(prev ?? emptyLog(now))))
@@ -135,12 +168,9 @@ export const register: Register = on => {
     const r = await next(e)
     const t0 = UI[await readLang($)]
     await $.command.register({ name: 'ctx', description: t0.cmdPanel })
-    // Pick up this session's log (after a restart or --resume), or start one.
+    // Pick up this session's log (after a restart or `claude --resume`), or start one.
     const id = await $.session.id()
-    const stored = (await $.store.get(sessionKey(id))) as SessionLog | undefined
-    const now = await $.clock.now()
-    // Logs from older versions lack newer fields; the empty log fills them in.
-    await update($, log, () => (stored ? { ...emptyLog(stored.startedAt), ...stored } : emptyLog(now)))
+    const stored = await loadSession($, id)
     for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
     // The usual pace, from the other sessions in the store.
     const others: SessionLog[] = []
@@ -150,8 +180,6 @@ export const register: Register = on => {
         if (other) others.push(other)
       }
     await update($, usual, () => usualRise(others))
-    await update($, hidden, () => [])
-    await update($, sent, () => [])
     // Only a list of ids counts; anything else in the store is ignored.
     const rawMuted = await $.store.get(MUTED)
     const mutedBefore = Array.isArray(rawMuted) ? rawMuted.filter((x): x is string => typeof x === 'string') : []
@@ -161,7 +189,8 @@ export const register: Register = on => {
       const tokens = context.tokens
       await saveLog($, l => addPoint(l, tokens, null))
     }
-    await refresh($)
+    // A failed read must not keep the minute clock below from starting.
+    await refresh($).catch(err => $.ui.log(`chudarin-context-mod: refresh failed: ${String(err)}`))
     // A minute clock for the session's life. The pane reads `minute`, so each write redraws it:
     // an idle session still shows a passed reset time and, after five minutes, that its figures
     // are stale. Redraw only; reading the data again here would keep it from ever looking stale.
@@ -179,7 +208,7 @@ export const register: Register = on => {
     const r = await next(e)
     await markDone($, p => p === `/${e.command}`).catch(err => $.ui.log(`chudarin-context-mod: ${String(err)}`))
     return r
-  }).catch(($, e, next) => (next.called ? {} : next(e)))
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'ctx' }, async $ => {
     const t = UI[await read($, lang)]
@@ -243,8 +272,15 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
-      const { Box, Button, Text } = $.ui.resolve(e)
-      // Every read at once: one wait per redraw instead of thirteen in a row (a resize redraws
+      const { Box, Button, Text: SurfaceText } = $.ui.resolve(e)
+      // Every Text in the surface's monospaced face: the desktop draws a proportional one, and the
+      // pane's columns, meters, bars and chart are counted in cells. The terminal ignores `mono`.
+      // A nested Text isn't said to take it from its parent (only size and weight are), so each asks.
+      const Text: typeof SurfaceText = props => SurfaceText({ mono: true, ...props })
+      // A Button draws a bare string in the surface's own face, so a name in a list goes in a Text.
+      // The terminal is monospaced already: its tree stays as it was.
+      const named = (name: string) => (e.surface === 'terminal' ? name : <Text>{name}</Text>)
+      // Every read at once: one wait per redraw instead of one per read (a resize redraws
       // on each step). Reading `minute` subscribes the pane to the minute clock.
       const [snap, language, session, open, where, , now, mutedIds, done, hiddenIds, track, usualPace] = await Promise.all([
         read($, snapshot),
@@ -270,6 +306,7 @@ export const register: Register = on => {
       const PAD = 2
       // The real width, however narrow: content wider than the pane wraps and breaks the grid.
       const W = Math.max(16, e.props.bodyColumns - 2 * PAD)
+      const compact = W < COMPACT
       // One grid for every list: name, tokens, share, then a bar or a chevron.
       const NAME = nameWidth(W)
       const NUM = 7
@@ -296,31 +333,50 @@ export const register: Register = on => {
           <Text> </Text>
         </Box>
       )
+      // A narrow pane's title whose figure doesn't fit beside it: the figure goes under it.
+      const titleOver = (title: string, figure: string) => (
+        <Box flexDirection="column">
+          <Text bold>{title.toUpperCase()}</Text>
+          <Text dimColor>{`  ${figure}`}</Text>
+        </Box>
+      )
       // A title with a figure on the right; `edge` is the column the figure ends at.
-      const titleRow = (title: string, right: string, edge = W) => (
-        <Text>
-          <Text bold>{title.toUpperCase()}</Text>
-          <Text dimColor>{right.padStart(Math.max(1, edge - title.length))}</Text>
-        </Text>
-      )
+      const titleRow = (title: string, right: string, edge = W) =>
+        compact && title.length + 1 + right.length > edge ? (
+          titleOver(title, right)
+        ) : (
+          <Text>
+            <Text bold>{title.toUpperCase()}</Text>
+            <Text dimColor>{right.padStart(Math.max(1, edge - title.length))}</Text>
+          </Text>
+        )
       // A title with a note right after it, for a note that reads with the title.
-      const titleNote = (title: string, note: string) => (
-        <Text>
-          <Text bold>{title.toUpperCase()}</Text>
-          <Text dimColor>{`  ${note}`}</Text>
-        </Text>
-      )
+      const titleNote = (title: string, note: string) =>
+        compact && title.length + 2 + note.length > W ? (
+          titleOver(title, note)
+        ) : (
+          <Text>
+            <Text bold>{title.toUpperCase()}</Text>
+            <Text dimColor>{`  ${note}`}</Text>
+          </Text>
+        )
 
       // "Don't show again" is for good and kept in the store; there is no way back.
       const setMuted = async (change: (prev: string[]) => string[]) => {
-        await update($, muted, change)
-        await $.store.set(MUTED, await read($, muted)).catch(err => $.ui.log(`chudarin-context-mod: hidden advice not saved: ${String(err)}`))
+        const next = await update($, muted, change)
+        await $.store.set(MUTED, next).catch(err => $.ui.log(`chudarin-context-mod: hidden advice not saved: ${String(err)}`))
       }
-      // Adds the request after whatever the person has typed. The hint stays until it is sent.
+      // Adds the request after whatever the person has typed; a command takes the draft's place,
+      // since it runs only on its own. The hint stays until it is sent.
       const putInChat = (h: { id: string; prompt: string | null }) => async () => {
         if (!h.prompt) return
-        const draft = (await $.prompt.read()).text
-        await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
+        const after = !h.prompt.startsWith('/') && (await $.prompt.read()).text.trim() !== ''
+        await $.prompt.fill({ text: after ? ` ${h.prompt}` : h.prompt, mode: after ? 'append' : 'replace' })
+      }
+      // Hidden for this session; after a /clear, for the new one.
+      const hide = (id: string) => async () => {
+        await followSession($)
+        await update($, hidden, prev => [...prev, id])
       }
       // Muted for good, sent to Claude this session, hidden by the person this session, or shown.
       const stateOf = (id: string) =>
@@ -382,7 +438,7 @@ export const register: Register = on => {
                   )}
                   {(state !== 'shown' || help.prompt) && <Text>{'   '}</Text>}
                   {state === 'shown' ? (
-                    <Button key="entry-hide" plain label={t.hideAdvice} onPress={() => update($, hidden, prev => [...prev, entry.id])}>
+                    <Button key="entry-hide" plain label={t.hideAdvice} onPress={hide(entry.id)}>
                       <Text dimColor>{t.hideAdvice}</Text>
                     </Button>
                   ) : (
@@ -405,7 +461,15 @@ export const register: Register = on => {
         const list = snap.entries.filter(x => x.group === group.id)
         const sum = list.reduce((n, x) => n + x.tokens, 0)
         const max = Math.max(0, ...list.map(x => x.tokens))
-        const barW = Math.max(4, W - NAME - NUM - PCT - 4)
+        // Group rows also hold a bar: the name leaves it four cells, and in a pane too narrow even
+        // for that the bar goes.
+        const NAME_G = nameWidth(W, 4)
+        const barW = Math.max(0, W - NAME_G - NUM - PCT - 4)
+        const bar = (tokens: number, width: number) =>
+          BLOCK.repeat(max > 0 ? Math.min(width, Math.max(1, Math.round((tokens / max) * width))) : 0)
+        // A narrow pane: the figures under the name, each row's bar starting at the same column.
+        const figures = (tokens: number) => `  ${k(tokens)} · ${pctOfUsed(tokens)}`
+        const FIG = Math.max(0, ...list.map(x => figures(x.tokens).length)) + 2
         return (
           <Box flexDirection="column" paddingX={PAD}>
             {back({ kind: 'home' })}
@@ -414,21 +478,36 @@ export const register: Register = on => {
             {columnsHead}
             {list.length === 0 && <Text dimColor>{t.emptyGroup}</Text>}
             {list.map(x => {
+              const open = go({ kind: 'entry', id: x.id })
+              if (compact)
+                return (
+                  <Box key={`row-${x.id}`} flexDirection="column">
+                    <Box flexDirection="row">
+                      <Button key={`entry-${x.id}`} plain label={x.label} onPress={open}>
+                        {named(clip(x.label, W - 2))}
+                      </Button>
+                      <Text dimColor> ▸</Text>
+                    </Box>
+                    <Text>
+                      {`  ${k(x.tokens)}`}
+                      <Text dimColor>{` · ${pctOfUsed(x.tokens)}`.padEnd(FIG - 2 - k(x.tokens).length)}</Text>
+                      <Text color={group.color}>{bar(x.tokens, Math.max(0, W - FIG))}</Text>
+                    </Text>
+                  </Box>
+                )
               // Only the name is the button: the pointer inverts a button, and an inverted bar breaks.
-              const name = x.label.slice(0, NAME - 1)
+              const name = clip(x.label, NAME_G - 1)
               return (
                 <Box key={`row-${x.id}`} flexDirection="row">
-                  <Button key={`entry-${x.id}`} plain label={x.label} onPress={go({ kind: 'entry', id: x.id })}>
-                    {name}
+                  <Button key={`entry-${x.id}`} plain label={x.label} onPress={open}>
+                    {named(name)}
                   </Button>
                   <Text>
-                    {' '.repeat(NAME - name.length)}
+                    {' '.repeat(NAME_G - name.length)}
                     {k(x.tokens).padStart(NUM)}
                     <Text dimColor>{pctOfUsed(x.tokens).padStart(PCT)}</Text>
                     {'  '}
-                    <Text color={group.color}>
-                      {BLOCK.repeat(max > 0 ? Math.max(1, Math.round((x.tokens / max) * barW)) : 0).padEnd(barW)}
-                    </Text>
+                    <Text color={group.color}>{bar(x.tokens, barW).padEnd(barW)}</Text>
                     <Text dimColor> ▸</Text>
                   </Text>
                 </Box>
@@ -441,7 +520,8 @@ export const register: Register = on => {
       // ---- home ----
       const v = pace(points)
       const fill = snap.window ? (total / snap.window) * 100 : 0
-      const turnsLeft = v.recent > 0 ? Math.floor((snap.threshold - total) / v.recent) : null
+      // Past the threshold there is nothing left to count.
+      const turnsLeft = v.recent > 0 && total < snap.threshold ? Math.floor((snap.threshold - total) / v.recent) : null
       // Limit figures arrive with model replies. In an idle session the reset time can pass while the
       // percent stays old: then the window has started over, so the limit shows as reset.
       const limit = (re: RegExp) => {
@@ -488,7 +568,8 @@ export const register: Register = on => {
       ]
       const gap = 2
       const colW = Math.floor((W - gap * (tiles.length - 1)) / tiles.length)
-      const meterW = Math.max(6, colW - 2)
+      // Never wider than its column: in a very narrow pane the meter takes the whole of it.
+      const meterW = Math.min(colW, Math.max(6, colW - 2))
       // Each tile's text is cut to its column; the gap between columns always stays.
       const cell = (text: string, i: number) => fitCell(text, colW) + (i < tiles.length - 1 ? ' '.repeat(gap) : '')
 
@@ -498,7 +579,7 @@ export const register: Register = on => {
         usedGroups.map(g => g.tokens),
         W - (usedGroups.length - 1),
       )
-      const hint = insight(snap.entries, fill, snap.used, snap.lang, [...hiddenIds, ...done, ...mutedIds])
+      const hint = insight(snap.entries, snap.used, snap.lang, [...hiddenIds, ...done, ...mutedIds])
       const tempo = speed(points, usualPace)
       const prices = snap.prices.slice(0, 6)
       const grid = priceGrid(W)
@@ -542,38 +623,62 @@ export const register: Register = on => {
 
       return (
         <Box flexDirection="column" paddingX={PAD}>
-          {/* three tiles on one grid */}
-          <Text>
-            {tiles.map((t, i) => (
-              <Text bold dimColor>
-                {cell(t.title, i)}
-              </Text>
-            ))}
-          </Text>
-          <Text>
-            {tiles.map((t, i) => (
-              <Text bold color={LEVEL_COLOR[t.level]}>
-                {cell(`${Math.round(t.percent)}%`, i)}
-              </Text>
-            ))}
-          </Text>
-          <Text>
-            {tiles.map((t, i) => {
-              const n = Math.min(meterW, Math.max(t.percent > 0 ? 1 : 0, Math.round((t.percent / 100) * meterW)))
-              return (
-                <Text>
-                  <Text color={LEVEL_COLOR[t.level]}>{BLOCK.repeat(n)}</Text>
-                  <Text dimColor>{EMPTY.repeat(meterW - n)}</Text>
-                  {' '.repeat(colW - meterW + (i < tiles.length - 1 ? gap : 0))}
-                </Text>
-              )
-            })}
-          </Text>
-          {[0, 1].map(row =>
-            tiles.some(t => t.lines[row]) ? (
-              <Text dimColor>{tiles.map((t, i) => cell(t.lines[row] ?? '', i)).join('')}</Text>
-            ) : null,
-          )}
+          {/* three tiles on one grid; a narrow pane stacks them, each meter the whole width */}
+          {compact
+            ? tiles.map((tile, i) => {
+                const n = Math.min(W, Math.max(tile.percent > 0 ? 1 : 0, Math.round((tile.percent / 100) * W)))
+                return (
+                  <Box flexDirection="column">
+                    {i > 0 && <Text> </Text>}
+                    <Text>
+                      <Text bold dimColor>
+                        {tile.title}
+                      </Text>
+                      <Text bold color={LEVEL_COLOR[tile.level]}>{`  ${Math.round(tile.percent)}%`}</Text>
+                    </Text>
+                    <Text>
+                      <Text color={LEVEL_COLOR[tile.level]}>{BLOCK.repeat(n)}</Text>
+                      <Text dimColor>{EMPTY.repeat(W - n)}</Text>
+                    </Text>
+                    {joinLines(tile.lines, W).map(l => (
+                      <Text dimColor>{l}</Text>
+                    ))}
+                  </Box>
+                )
+              })
+            : [
+              <Text>
+                {tiles.map((t, i) => (
+                  <Text bold dimColor>
+                    {cell(t.title, i)}
+                  </Text>
+                ))}
+              </Text>,
+              <Text>
+                {tiles.map((t, i) => (
+                  <Text bold color={LEVEL_COLOR[t.level]}>
+                    {cell(`${Math.round(t.percent)}%`, i)}
+                  </Text>
+                ))}
+              </Text>,
+              <Text>
+                {tiles.map((t, i) => {
+                  const n = Math.min(meterW, Math.max(t.percent > 0 ? 1 : 0, Math.round((t.percent / 100) * meterW)))
+                  return (
+                    <Text>
+                      <Text color={LEVEL_COLOR[t.level]}>{BLOCK.repeat(n)}</Text>
+                      <Text dimColor>{EMPTY.repeat(meterW - n)}</Text>
+                      {' '.repeat(colW - meterW + (i < tiles.length - 1 ? gap : 0))}
+                    </Text>
+                  )
+                })}
+              </Text>,
+              ...[0, 1].map(row =>
+                tiles.some(t => t.lines[row]) ? (
+                  <Text dimColor>{tiles.map((t, i) => cell(t.lines[row] ?? '', i)).join('')}</Text>
+                ) : null,
+              ),
+            ]}
           {tempo && <Text>{t.speed(tempo.kind, tempo.ratio)}</Text>}
           {sectionGap}
 
@@ -597,15 +702,34 @@ export const register: Register = on => {
           </Box>
           {columnsHead}
           {usedGroups.map(g => {
-            const name = g.label.slice(0, NAME - 3)
             const lit = { scope: `group-${g.id}`, bold: true } as const
+            // A narrow pane: the name on its own line, the figures under it; every lit part still
+            // sits straight in a Box, so either line lights the bar piece.
+            if (compact)
+              return (
+                <Box key={`row-${g.id}`} flexDirection="column">
+                  <Box flexDirection="row">
+                    <Text color={g.color} hover={lit}>
+                      ■{' '}
+                    </Text>
+                    <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
+                      {named(clip(g.label, W - 4))}
+                    </Button>
+                    <Text dimColor hover={lit}>
+                      {' ▸'}
+                    </Text>
+                  </Box>
+                  <Text dimColor hover={lit}>{`  ${k(g.tokens)} · ${pctOfUsed(g.tokens)}`}</Text>
+                </Box>
+              )
+            const name = clip(g.label, NAME - 3)
             return (
               <Box key={`row-${g.id}`} flexDirection="row">
                 <Text color={g.color} hover={lit}>
                   ■{' '}
                 </Text>
                 <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
-                  {name}
+                  {named(name)}
                 </Button>
                 <Text hover={lit}>
                   {' '.repeat(NAME - 2 - name.length)}
@@ -635,7 +759,7 @@ export const register: Register = on => {
                   </Button>
                 )}
                 {hint.prompt && <Text>{'   '}</Text>}
-                <Button key="hint-hide" plain label={t.hintHide} onPress={() => update($, hidden, prev => [...prev, hint.id])}>
+                <Button key="hint-hide" plain label={t.hintHide} onPress={hide(hint.id)}>
                   <Text dimColor>{t.hintHide}</Text>
                 </Button>
               </Box>
@@ -706,28 +830,48 @@ export const register: Register = on => {
                 {shown.length > 2 ? t.turnRange(shown[1]!.turn, shown[shown.length - 1]!.turn) : ''}
               </Text>
               {/* Each jump fits one line, cut by hand: a Button doesn't truncate its label. A jump
-                  with more to read opens on a press, marked ▸ / ▾ like the folded blocks. */}
+                  with more to read opens on a press, marked ▸ / ▾ like the folded blocks. A narrow
+                  pane puts the caption on a line of its own, under the figures. */}
               {peaks.map((j, n) => {
                 const delta = `+${k(j.delta)}`.padStart(6)
                 const turn = `  ${t.turn(j.turn)}  `
                 const caption = j.cause ?? t.conversation
                 // Opens when there is more to read: a kept whole text, or a label the line cuts.
                 const full = j.detail ?? caption
-                const fits = W - 2 - delta.length - turn.length
+                // The block is indented 2, so a line here has W - 2 cells; a narrow pane's caption line
+                // gives 2 of them to its own indent.
+                const fits = compact ? W - 4 : W - 2 - delta.length - turn.length
                 const opens = full !== caption || caption.length > fits
-                const room = Math.max(8, fits - (opens ? 2 : 0))
+                const room = compact ? fits : Math.max(8, fits - (opens ? 2 : 0))
                 const line = caption.length > room ? `${caption.slice(0, room - 1)}…` : caption
                 const hover = { scope: `peak-${n + 1}`, color: 'claude' } as const
                 const isOpenJump = isOpen(`jump:${j.turn}`)
-                const row = (
+                const mark = opens && <Text dimColor>{isOpenJump ? ' ▾' : ' ▸'}</Text>
+                const row = compact ? (
+                  <Text>
+                    {`+${k(j.delta)}`}
+                    <Text dimColor>{`  ${t.turn(j.turn)}`}</Text>
+                    {mark}
+                  </Text>
+                ) : (
                   <Text>
                     {delta}
                     <Text dimColor>{turn}</Text>
                     {line}
-                    {opens && <Text dimColor>{isOpenJump ? ' ▾' : ' ▸'}</Text>}
+                    {mark}
                   </Text>
                 )
-                if (!opens) return <Text hover={hover}>{row}</Text>
+                // The caption's own line in a narrow pane: it lights the column as the row does.
+                const under = compact && <Text hover={hover}>{`  ${line}`}</Text>
+                if (!opens)
+                  return compact ? (
+                    <Box flexDirection="column">
+                      <Text hover={hover}>{row}</Text>
+                      {under}
+                    </Box>
+                  ) : (
+                    <Text hover={hover}>{row}</Text>
+                  )
                 // Opened: what the line doesn't already say. The label caption in full is not repeated.
                 const rest = line === caption && full.startsWith(caption) ? full.slice(caption.length).replace(/^[:\s]+/, '') : full
                 return (
@@ -735,10 +879,11 @@ export const register: Register = on => {
                     <Button key={`jump-${j.turn}`} plain label={caption} hover={hover} onPress={toggle(`jump:${j.turn}`)}>
                       {row}
                     </Button>
+                    {under}
                     {/* wrapped by hand: the pane cuts a long Text at its edge rather than wrapping it */}
                     {isOpenJump && (
-                      <Box paddingLeft={8} flexDirection="column">
-                        {wrapLines(rest || full, Math.max(10, W - 10)).map(l => (
+                      <Box paddingLeft={compact ? 2 : 8} flexDirection="column">
+                        {wrapLines(rest || full, compact ? W - 4 : Math.max(10, W - 10)).map(l => (
                           <Text dimColor>{l}</Text>
                         ))}
                       </Box>
@@ -772,7 +917,7 @@ export const register: Register = on => {
       const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
       $.ui.log(`chudarin-context-mod: pane render failed: ${text}`)
       const { Text } = $.ui.resolve(e)
-      return <Text color="error">chudarin-context-mod: {text}</Text>
+      return <Text color="error" mono>chudarin-context-mod: {text}</Text>
     }
   })
 }

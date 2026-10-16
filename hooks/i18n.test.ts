@@ -44,6 +44,9 @@ test('limit forecast reads as time left', () => {
   expect(UI.ru.limitLeft(2)).toBe('хватит на ~5 мин')
   expect(UI.ru.limitLeft(120)).toBe('хватит на ~2 ч')
   expect(UI.en.limitLeft(70)).toBe('about 1 h 10 min left')
+  // Nothing left at this pace: no "5 min".
+  expect(UI.ru.limitLeft(0)).toBe('лимит на исходе')
+  expect(UI.en.limitLeft(0)).toBe('about to run out')
   expect(UI.ru.limitUntilReset).toBe('хватит до сброса')
   expect(UI.en.limitUntilReset).toBe('lasts until reset')
 })

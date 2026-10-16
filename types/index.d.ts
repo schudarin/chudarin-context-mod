@@ -62,7 +62,7 @@ declare module 'claude-code' {
       lang: 'ru' | 'en'
       // The usual context rise per turn over past sessions; null until there are enough.
       usual: number | null
-      // Hints acted on or hidden this session, by entry id.
+      // Advice the person hid this session, by entry id.
       hidden: string[]
       // Advice sent to Claude or run as a command this session, by entry id.
       sent: string[]
@@ -72,6 +72,8 @@ declare module 'claude-code' {
       limitTrack: LimitTrack | null
       // Written once a minute; the pane reads it, so the write redraws an open pane.
       minute: number
+      // The session id that log, sent and hidden belong to; /clear and a resume change it.
+      logId: string | null
     }
   }
 }

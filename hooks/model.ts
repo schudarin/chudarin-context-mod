@@ -58,6 +58,19 @@ export function wrapLines(text: string, width: number): string[] {
   return out
 }
 
+// Parts joined with " · " and wrapped to `width`; the dot stays with the part before it, so a
+// line never starts with it. Empty parts are left out.
+export function joinLines(parts: readonly string[], width: number): string[] {
+  // A character no text holds keeps each dot glued to the word before it while wrapping.
+  const GLUE = '\u0001'
+  return wrapLines(parts.filter(Boolean).join(`${GLUE}· `), width).map(l => l.split(GLUE).join(' '))
+}
+
+// A name cut to its column with an ellipsis; a short one is left as it is.
+export function clip(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
+}
+
 // A text in exactly `width` cells: padded, or cut with an ellipsis so it never runs into the next.
 export function fitCell(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text.padEnd(width)
@@ -69,9 +82,10 @@ export function priceGrid(width: number): { columns: 1 | 2; width: number } {
   return width < 60 ? { columns: 1, width: Math.min(width, 40) } : { columns: 2, width: Math.min(36, Math.floor((width - 4) / 2)) }
 }
 
-// Name column for group and entry lists: what is left after tokens, share and the chevron.
-export function nameWidth(width: number): number {
-  return Math.min(30, Math.max(12, width - 17))
+// Name column for group and entry lists: what is left after tokens, share, the chevron and,
+// on a group page, `bar` cells for the bar.
+export function nameWidth(width: number, bar = 0): number {
+  return Math.min(30, Math.max(12, width - 17 - bar))
 }
 
 // Group name for a tool: built-in tools by name, MCP tools by server.

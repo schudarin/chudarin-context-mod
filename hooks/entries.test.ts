@@ -91,26 +91,26 @@ test('insight speaks only when there is something to do', () => {
   const entries = buildEntries(categories, {}, messages, 'ru')
   const used = entries.reduce((n, e) => n + e.tokens, 0)
   // A full context is shown by the meter; the hint line only names something to act on.
-  expect(insight(entries, 60, used, 'ru')?.text ?? '').not.toContain('/compact')
+  expect(insight(entries, used, 'ru')?.text ?? '').not.toContain('/compact')
   // System tools is the biggest entry here, but nothing can be done about it.
-  expect(insight(entries, 20, used, 'ru')?.text ?? '').not.toContain('инструментов')
-  expect(insight([], 20, 100, 'ru')).toBe(null)
+  expect(insight(entries, used, 'ru')?.text ?? '').not.toContain('инструментов')
+  expect(insight([], 100, 'ru')).toBe(null)
   const bash = [{ id: 'result:Bash', label: 'Вывод команд Bash', group: 'tools' as const, tokens: 61_000, count: 3, top: [] }]
-  expect(insight(bash, 20, 300_000, 'ru')).toEqual({
+  expect(insight(bash, 300_000, 'ru')).toEqual({
     id: 'result:Bash',
     text: 'Вывод команд Bash занял 61k. Проси Claude запускать тесты и разбирать длинные логи в субагенте: в чат вернётся только итог.',
     prompt: 'Дальше запускай тесты и разбирай длинные логи в субагенте, в чат возвращай только итог.',
   })
   // A hint the person acted on or hid stays away.
-  expect(insight(bash, 20, 300_000, 'ru', ['result:Bash'])).toBe(null)
+  expect(insight(bash, 300_000, 'ru', ['result:Bash'])).toBe(null)
   // Some advice is for the person alone: nothing to put in the chat.
   const files = [{ id: 'result:Read', label: 'Прочитанные файлы', group: 'tools' as const, tokens: 61_000, count: 3, top: [] }]
-  expect(insight(files, 20, 300_000, 'ru')?.prompt).toBe(null)
+  expect(insight(files, 300_000, 'ru')?.prompt).toBe(null)
   const mcp = [{ id: 'cat:MCP tools', label: 'Схемы MCP-инструментов', group: 'service' as const, tokens: 61_000, count: 1, top: [] }]
-  expect(insight(mcp, 20, 300_000, 'ru')?.prompt).toBe('/mcp')
+  expect(insight(mcp, 300_000, 'ru')?.prompt).toBe('/mcp')
   // System reminders can't be reduced, so they never make a hint.
   const reminders = [{ id: 'reminders', label: 'Служебные вставки', group: 'service' as const, tokens: 90_000, count: 40, top: [] }]
-  expect(insight(reminders, 20, 300_000, 'ru')).toBe(null)
+  expect(insight(reminders, 300_000, 'ru')).toBe(null)
 })
 
 test('English labels and prices', () => {
@@ -119,7 +119,7 @@ test('English labels and prices', () => {
   expect(groupTotals(entries, 'en')[0]!.label).toBe('Tool work')
   expect(actionPrices(messages, 'en').some(p => p.name === 'Write a file')).toBe(true)
   const bash = [{ id: 'result:Bash', label: 'Bash output', group: 'tools' as const, tokens: 61_000, count: 3, top: [] }]
-  expect(insight(bash, 20, 300_000, 'en')).toEqual({
+  expect(insight(bash, 300_000, 'en')).toEqual({
     id: 'result:Bash',
     text: 'Bash output took 61k. Ask Claude to run tests and go through long logs in a subagent: only the summary comes back.',
     prompt: 'From now on, run tests and go through long logs in a subagent, and bring back only the summary.',
