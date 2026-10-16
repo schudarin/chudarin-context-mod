@@ -467,4 +467,77 @@ test('hovering a jump in the list lights its column on the chart', async ($, on)
   const group = drawn.split('"scope":"peak-1"').length - 1
   expect(group).toBeGreaterThan(1)
   expect(drawn).toContain('+45k')
+  // Both ways: in the terminal a Text nested in a Text lights with its group but cannot light it,
+  // so every member sits straight in a Box, the chart's cells included.
+  type Node = { type?: string; props?: unknown; children?: unknown[] }
+  const parents: string[] = []
+  const walk = (n: unknown, parent: string) => {
+    if (!n || typeof n !== 'object') return
+    const node = n as Node
+    // Wherever the drawn tree keeps the hover scope, it is on the element itself, not its children.
+    const { children: _children, ...own } = node
+    if (JSON.stringify(own).includes('"scope":"peak-1"')) parents.push(parent)
+    for (const c of node.children ?? []) walk(c, node.type ?? '')
+  }
+  walk(await ui.drawn(), '')
+  expect(parents.length).toBeGreaterThan(1)
+  expect(parents.every(p => p === 'Box')).toBe(true)
+})
+
+test('a limit whose reset time has passed shows as reset, not as the old percent', async ($, on) => {
+  const stale = {
+    ...usage,
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 50, resetsAt: '2026-10-15T11:30:00' },
+      { kind: 'seven_day', percentUsed: 72, resetsAt: '2026-10-19T10:00:00' },
+    ],
+  }
+  on('session.usage', () => ({ value: stale }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  const home = JSON.stringify(await ui.drawn())
+  expect(home).toContain('reset at 11:30')
+  expect(home).not.toContain('resets 11:30')
+})
+
+test('after five idle minutes the panel says its data is stale, and the button refreshes it', async ($, on) => {
+  let now = Date.parse('2026-10-15T12:00:00')
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: now }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  // The minute timer redraws the open panel; the test redraws it after moving the clock.
+  const look = async () => {
+    await ui.redraw()
+    return JSON.stringify(await ui.drawn())
+  }
+  // Fresh: no line at all.
+  expect(await look()).not.toContain('Data is stale')
+  now = Date.parse('2026-10-15T12:04:00')
+  expect(await look()).not.toContain('Data is stale')
+  now = Date.parse('2026-10-15T12:07:00')
+  expect(await look()).toContain('Data is stale, last updated at 12:00')
+  await ui.press({ key: 'refresh' })
+  expect(await look()).not.toContain('Data is stale')
 })

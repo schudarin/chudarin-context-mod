@@ -30,6 +30,8 @@ export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
 // Everything the pane reads, refreshed after each turn.
 export type Snapshot = {
   lang: 'ru' | 'en'
+  // When it was read, for the "updated at" line.
+  at: number
   entries: {
     id: string
     label: string
@@ -68,6 +70,8 @@ declare module 'claude-code' {
       muted: string[]
       // Samples of the 5-hour limit in its current window, for the forecast; kept in $.store.
       limitTrack: LimitTrack | null
+      // Written once a minute; the pane reads it, so the write redraws an open pane.
+      minute: number
     }
   }
 }

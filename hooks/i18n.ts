@@ -75,6 +75,9 @@ const ru = {
     return `${ICON[kind]} контекст растёт в ${String(x).replace('.', ',')} ${word} ${kind === 'snail' ? 'медленнее' : 'быстрее'} обычного`
   },
   resets: (at: string) => `сброс ${at}`,
+  wasReset: (at: string) => `сбросился в ${at}`,
+  stale: (at: string) => `Данные устарели, последнее обновление в ${at}`,
+  refresh: 'Обновить',
   whatFills: 'Чем занят контекст',
   prices: 'Сколько стоит действие',
   pricesHint: 'чем дешевле способ, тем дольше хватит контекста',
@@ -152,6 +155,9 @@ const en: typeof ru = {
       ? `${ICON.cat} context grows at your usual pace`
       : `${ICON[kind]} context grows ${times(ratio)}× ${kind === 'snail' ? 'slower' : 'faster'} than usual`,
   resets: at => `resets ${at}`,
+  wasReset: at => `reset at ${at}`,
+  stale: at => `Data is stale, last updated at ${at}`,
+  refresh: 'Refresh',
   whatFills: 'What fills the context',
   prices: 'What an action costs',
   pricesHint: 'the cheaper the way, the longer the context lasts',

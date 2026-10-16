@@ -20,6 +20,7 @@ const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, 
 const sent = atom({ plugin: 'chudarin-context-mod', key: 'sent' } as const, [])
 const muted = atom({ plugin: 'chudarin-context-mod', key: 'muted' } as const, [])
 const limitTrack = atom({ plugin: 'chudarin-context-mod', key: 'limitTrack' } as const, null)
+const minute = atom({ plugin: 'chudarin-context-mod', key: 'minute' } as const, 0)
 // Store key for the 5-hour limit samples: the limit is shared by every session.
 const LIMIT = 'limit:five_hour'
 
@@ -54,6 +55,8 @@ async function markDone($: EngineInterface, matches: (prompt: string) => boolean
 }
 
 const PANE = 'chudarin-context-mod'
+// Figures older than this get the "data is stale" line.
+const STALE_MS = 5 * 60_000
 // Session logs kept in the store; older ones are dropped.
 const KEEP_SESSIONS = 30
 const BAND_POINTS = 24
@@ -109,6 +112,7 @@ async function refresh($: EngineInterface) {
   const entries = buildEntries(categories, detailsFor(b), messages, l)
   const next: Snapshot = {
     lang: l,
+    at: await $.clock.now(),
     entries,
     prices: actionPrices(messages, l),
     limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
@@ -161,6 +165,15 @@ export const register: Register = on => {
       await saveLog($, l => addPoint(l, tokens, null))
     }
     await refresh($)
+    // A minute clock for the session's life. The pane reads `minute`, so each write redraws it:
+    // an idle session still shows a passed reset time and, after five minutes, that its figures
+    // are stale. Redraw only; reading the data again here would keep it from ever looking stale.
+    $.clock.every(60_000, () => {
+      void $.clock
+        .now()
+        .then(at => update($, minute, () => at))
+        .catch(err => $.ui.log(`chudarin-context-mod: minute clock failed: ${String(err)}`))
+    })
     return r
   })
 
@@ -179,6 +192,7 @@ export const register: Register = on => {
       return { text: t.panelClosed }
     }
     await update($, page, () => ({ kind: 'home' }) as Page)
+    await refresh($).catch(err => $.ui.log(`chudarin-context-mod: refresh failed: ${String(err)}`))
     await $.ui.open({ id: PANE, title: t.paneTitle, focus: true, closeOnEscape: true })
     return { text: t.panelOpened }
   })
@@ -267,6 +281,8 @@ export const register: Register = on => {
       const weekSpent = session?.limits?.seven_day?.spent ?? null
       const open = await read($, expanded)
       const where = await read($, page)
+      // Subscribes the pane to the minute clock: each tick redraws it.
+      await read($, minute)
       const now = await $.clock.now()
       // Two empty columns on each side of every page; the grid fits inside them.
       const PAD = 2
@@ -446,11 +462,21 @@ export const register: Register = on => {
       const v = pace(points)
       const fill = snap.window ? (total / snap.window) * 100 : 0
       const turnsLeft = v.recent > 0 ? Math.floor((snap.threshold - total) / v.recent) : null
-      const limit = (re: RegExp) => snap.limits.find(l => re.test(l.kind) && !/fable/i.test(l.kind))
+      // Limit figures arrive with model replies. In an idle session the reset time can pass while the
+      // percent stays old: then the window has started over, so the limit shows as reset.
+      const limit = (re: RegExp) => {
+        const l = snap.limits.find(x => re.test(x.kind) && !/fable/i.test(x.kind))
+        const passed = !!l?.resetsAt && Date.parse(l.resetsAt) <= now
+        return l && { ...l, percentUsed: passed ? 0 : l.percentUsed, passed }
+      }
+      const limitLine = (l: { resetsAt?: string | null; passed: boolean }) =>
+        !l.resetsAt ? '' : l.passed ? t.wasReset(resetLabel(l.resetsAt, now)) : t.resets(resetLabel(l.resetsAt, now))
       const five = limit(/five_hour/)
       const track = await read($, limitTrack)
       const forecast =
-        five?.resetsAt && track?.resetsAt === five.resetsAt ? limitForecast(track, now, Date.parse(five.resetsAt)) : null
+        five?.resetsAt && !five.passed && track?.resetsAt === five.resetsAt
+          ? limitForecast(track, now, Date.parse(five.resetsAt))
+          : null
       const fiveForecast = forecast === null ? '' : forecast === 'untilReset' ? t.limitUntilReset : t.limitLeft(forecast.minutes)
       const week = limit(/seven_day/)
       const tiles = [
@@ -466,7 +492,7 @@ export const register: Register = on => {
                 title: t.tile5h,
                 percent: five.percentUsed,
                 level: levelOf(five.percentUsed, 70, 90),
-                lines: [five.resetsAt ? t.resets(resetLabel(five.resetsAt, now)) : '', fiveForecast],
+                lines: [limitLine(five), fiveForecast],
               },
             ]
           : []),
@@ -476,7 +502,7 @@ export const register: Register = on => {
                 title: t.tileWeek,
                 percent: week.percentUsed,
                 level: levelOf(week.percentUsed, 70, 90),
-                lines: [week.resetsAt ? t.resets(resetLabel(week.resetsAt, now)) : '', ''],
+                lines: [limitLine(week), ''],
               },
             ]
           : []),
@@ -508,7 +534,8 @@ export const register: Register = on => {
       const peaks = jumps(shown, 5)
       const peakAt = new Map(peaks.map((j, n) => [shown.findIndex(p => p.turn === j.turn) - 1, n + 1]))
       // A chart row split so each peak's cell joins its hover group: pointing at a jump in the
-      // list lights its column. The surface does the lighting; no hook runs.
+      // list lights its column, and pointing at the column lights the jump. The surface does the
+      // lighting; no hook runs.
       const chartLine = (line: string) => {
         const parts: ReturnType<typeof Text>[] = []
         let run = ''
@@ -672,10 +699,12 @@ export const register: Register = on => {
                 rises,
                 CHART_ROWS,
               ).map((line, i) => (
-                <Text>
-                  <Text dimColor>{(i === 0 ? k(chartMax) : '').padStart(5)} </Text>
+                // A row of sibling Texts, not one Text: a nested Text can't light its hover group,
+                // and a peak's cells must light the list line too.
+                <Box flexDirection="row">
+                  <Text dimColor>{`${(i === 0 ? k(chartMax) : '').padStart(5)} `}</Text>
                   {chartLine(line)}
-                </Text>
+                </Box>
               ))}
               <Text dimColor>
                 {'    0 '}
@@ -695,6 +724,17 @@ export const register: Register = on => {
                   {t.compactLine(c.trigger === 'manual' ? t.manual : c.trigger === 'auto' ? t.auto : t.plugin, k(c.before), k(c.after))}
                 </Text>
               ))}
+            </Box>
+          )}
+
+          {/* only once the figures are five minutes old; limits move only when a reply comes in */}
+          {now - (snap.at ?? now) >= STALE_MS && <Text> </Text>}
+          {now - (snap.at ?? now) >= STALE_MS && (
+            <Box flexDirection="row">
+              <Text dimColor>{`${t.stale(resetLabel(new Date(snap.at).toISOString(), now))} · `}</Text>
+              <Button key="refresh" plain label={t.refresh} onPress={() => refresh($)}>
+                <Text color="claude">{t.refresh}</Text>
+              </Button>
             </Box>
           )}
         </Box>
