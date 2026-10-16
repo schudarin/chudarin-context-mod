@@ -54,6 +54,8 @@ declare module 'claude-code' {
       usual: number | null
       // Hints acted on or hidden this session, by entry id.
       hidden: string[]
+      // Advice sent to Claude or run as a command this session, by entry id.
+      sent: string[]
     }
   }
 }

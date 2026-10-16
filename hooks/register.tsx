@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Page, SessionLog, Snapshot, Step } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
-import { helpFor } from './help'
+import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
 import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, speed, usualRise, windowRows } from './model'
@@ -18,6 +18,20 @@ const bandOn = atom({ plugin: 'chudarin-context-mod', key: 'bandOn' } as const, 
 const lang = atom({ plugin: 'chudarin-context-mod', key: 'lang' } as const, 'en' as Lang)
 const usual = atom({ plugin: 'chudarin-context-mod', key: 'usual' } as const, null)
 const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, [])
+const sent = atom({ plugin: 'chudarin-context-mod', key: 'sent' } as const, [])
+
+// Marks advice as done once its request was sent or its command run: what counts is
+// what reached Claude, not what the panel put in the box.
+async function markDone($: EngineInterface, matches: (prompt: string) => boolean) {
+  const ids = HELP_IDS.filter(id => (['ru', 'en'] as const).some(l => {
+    const p = helpFor(id, l).prompt
+    return p !== null && matches(p)
+  }))
+  if (ids.length === 0) return
+  const add = (prev: string[]) => [...prev, ...ids.filter(id => !prev.includes(id))]
+  await update($, sent, add)
+  await update($, hidden, add)
+}
 
 const PANE = 'chudarin-context-mod'
 // Session logs kept in the store; older ones are dropped.
@@ -107,6 +121,7 @@ export const register: Register = on => {
       }
     await update($, usual, () => usualRise(others))
     await update($, hidden, () => [])
+    await update($, sent, () => [])
     const { context } = await $.session.usage()
     if (context.tokens !== undefined && !stored?.points.length) {
       const tokens = context.tokens
@@ -115,6 +130,13 @@ export const register: Register = on => {
     await refresh($)
     return r
   })
+
+  // Any slash command, built-in ones included: running /mcp or /effort counts as done.
+  on('command.run', async ($, e, next) => {
+    const r = await next(e)
+    await markDone($, p => p === `/${e.command}`).catch(err => $.ui.log(`chudarin-context-mod: ${String(err)}`))
+    return r
+  }).catch(($, e, next) => (next.called ? {} : next(e)))
 
   on('command.run', { command: 'ctx' }, async $ => {
     const t = UI[await read($, lang)]
@@ -137,6 +159,7 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     await update($, heaviest, () => null)
+    await markDone($, p => !p.startsWith('/') && e.text.includes(p))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -255,6 +278,15 @@ export const register: Register = on => {
         </Text>
       )
 
+      const hide = (id: string) => update($, hidden, prev => [...prev, id])
+      // Adds the request after whatever the person has typed. The hint stays until it is sent.
+      const putInChat = (h: { id: string; prompt: string | null }) => async () => {
+        if (!h.prompt) return
+        const draft = (await $.prompt.read()).text
+        await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
+      }
+      const done = await read($, sent)
+
       // ---- entry page: what it is, why so much, what to do ----
       if (where.kind === 'entry') {
         const entry = snap.entries.find(x => x.id === where.id)
@@ -292,8 +324,16 @@ export const register: Register = on => {
             </Box>
             <Text> </Text>
             <Text bold>{t.whatToDo}</Text>
-            <Box paddingLeft={2}>
+            <Box paddingLeft={2} flexDirection="column">
               <Text>{help.todo ?? t.nothingToDo}</Text>
+              {help.prompt && done.includes(entry.id) && (
+                <Text dimColor>{help.prompt.startsWith('/') ? t.hintRan : t.hintSent}</Text>
+              )}
+              {help.prompt && !done.includes(entry.id) && (
+                <Button key="entry-fill" plain label={t.hintFill} onPress={putInChat({ id: entry.id, prompt: help.prompt })}>
+                  <Text color="claude">{t.hintFill}</Text>
+                </Button>
+              )}
             </Box>
           </Box>
         )
@@ -385,14 +425,6 @@ export const register: Register = on => {
         W - (usedGroups.length - 1),
       )
       const hint = insight(snap.entries, fill, snap.used, snap.lang, await read($, hidden))
-      const hide = (id: string) => update($, hidden, prev => [...prev, id])
-      // Adds the request after whatever the person has typed, then hides the hint.
-      const putInChat = (h: { id: string; prompt: string | null }) => async () => {
-        if (!h.prompt) return
-        const draft = (await $.prompt.read()).text
-        await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
-        await hide(h.id)
-      }
       const tempo = speed(points, await read($, usual))
       const prices = snap.prices.slice(0, 6)
       const half = Math.ceil(prices.length / 2)

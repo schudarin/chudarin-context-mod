@@ -213,6 +213,7 @@ for (const button of ['hint-fill', 'hint-hide'] as const) {
       filled.push(e.text)
       return { isFilled: true }
     })
+    on('prompt.submit', (_$, e) => ({ text: e.text }))
     await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
     const ui = await $.ui.mount({
       plugin: 'chudarin-context-mod',
@@ -223,7 +224,74 @@ for (const button of ['hint-fill', 'hint-hide'] as const) {
     })
     expect(JSON.stringify(await ui.drawn())).toContain('Bash output took')
     await ui.press({ key: button })
+    if (button === 'hint-fill') {
+      expect(filled).toEqual(['From now on, run tests and go through long logs in a subagent, and bring back only the summary.'])
+      // Put in the box is not done yet: the hint waits until the request is sent.
+      expect(JSON.stringify(await ui.drawn())).toContain('Bash output took')
+      await $.prompt.submit({ text: `fix the login ${filled[0]}` } as never)
+    }
     expect(JSON.stringify(await ui.drawn())).not.toContain('Bash output took')
-    expect(filled).toEqual(button === 'hint-fill' ? ['From now on, run tests and go through long logs in a subagent, and bring back only the summary.'] : [])
   })
 }
+
+test('the entry page puts its advice in the chat too', async ($, on) => {
+  const filled: string[] = []
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('prompt.read', () => ({ value: { text: 'fix the login', cursor: 13 } }) as never)
+  on('prompt.fill', (_$, e) => {
+    filled.push(`${e.mode}:${e.text}`)
+    return { isFilled: true }
+  })
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  await ui.press({ key: 'group-tools' })
+  await ui.press({ key: 'entry-result:Bash' })
+  await ui.press({ key: 'entry-fill' })
+  expect(filled).toEqual(['append: From now on, run tests and go through long logs in a subagent, and bring back only the summary.'])
+  // Not sent yet: the button stays, so it can be put in again.
+  expect(JSON.stringify(await ui.drawn())).toContain('"Put in chat"')
+  await $.prompt.submit({ text: 'fix the login From now on, run tests and go through long logs in a subagent, and bring back only the summary.' } as never)
+  // Sent: a quiet mark instead of the button.
+  const after = JSON.stringify(await ui.drawn())
+  expect(after).toContain('✓ Sent to Claude')
+  expect(after).not.toContain('"Put in chat"')
+})
+
+test('running the advised command counts as done', async ($, on) => {
+  const categories = [
+    { name: 'MCP tools', tokens: 15_000, color: 'x', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 5_000, color: 'x', isDeferred: false, kind: 'used' },
+    { name: 'Free space', tokens: 980_000, color: 'x', isDeferred: false, kind: 'free' },
+  ]
+  const mcpHeavy = { ...usage, context: { ...usage.context, breakdown: { ...usage.context.breakdown, categories } } }
+  on('session.usage', () => ({ value: mcpHeavy }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('command.run', () => ({ text: '' }))
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  expect(JSON.stringify(await ui.drawn())).toContain('MCP tool schemas took')
+  await $.command.run({ command: 'mcp', args: '' } as never)
+  expect(JSON.stringify(await ui.drawn())).not.toContain('MCP tool schemas took')
+})

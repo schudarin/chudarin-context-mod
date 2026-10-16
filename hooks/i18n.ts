@@ -39,6 +39,8 @@ const ru = {
   turnsLeft: (n: number) => `хватит на ~${n} ходов`,
   hintFill: 'Вставить в чат',
   hintHide: 'Скрыть',
+  hintSent: '✓ Отправлено Claude',
+  hintRan: '✓ Команда запущена',
   speed: (kind: SpeedKind, ratio: number) => {
     if (kind === 'cat') return `${ICON.cat} контекст растёт как обычно`
     const x = times(ratio)
@@ -115,6 +117,8 @@ const en: typeof ru = {
   turnsLeft: n => `about ${n} turns left`,
   hintFill: 'Put in chat',
   hintHide: 'Hide',
+  hintSent: '✓ Sent to Claude',
+  hintRan: '✓ Command run',
   speed: (kind, ratio) =>
     kind === 'cat'
       ? `${ICON.cat} context grows at your usual pace`
