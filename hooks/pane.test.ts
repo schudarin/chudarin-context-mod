@@ -92,3 +92,29 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
   }
 }
+
+test('every page keeps two empty columns on each side', async ($, on) => {
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  const padding = async () => {
+    const root = (await ui.drawn()) as { props: { paddingX?: number } }
+    return root.props.paddingX
+  }
+  expect(await padding()).toBe(2)
+  await ui.press({ key: 'group-tools' })
+  expect(await padding()).toBe(2)
+  await ui.press({ key: 'entry-result:Bash' })
+  expect(await padding()).toBe(2)
+})

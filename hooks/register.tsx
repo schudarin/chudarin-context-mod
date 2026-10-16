@@ -200,7 +200,9 @@ export const register: Register = on => {
       const open = await read($, expanded)
       const where = await read($, page)
       const now = await $.clock.now()
-      const W = Math.max(40, e.props.bodyColumns)
+      // Two empty columns on each side of every page; the grid fits inside them.
+      const PAD = 2
+      const W = Math.max(40, e.props.bodyColumns - 2 * PAD)
       // One grid for every list: name, tokens, share, then a bar or a chevron.
       const NAME = 30
       const NUM = 7
@@ -242,14 +244,14 @@ export const register: Register = on => {
         const parent: Page = { kind: 'group', id: entry?.group ?? help.group }
         if (!entry)
           return (
-            <Box flexDirection="column">
+            <Box flexDirection="column" paddingX={PAD}>
               {back(parent)}
               <Text dimColor>{t.entryGone}</Text>
             </Box>
           )
         const average = entry.count ? Math.round(entry.tokens / entry.count) : 0
         return (
-          <Box flexDirection="column">
+          <Box flexDirection="column" paddingX={PAD}>
             {back(parent)}
             {titleRow(entry.label, ofUsed(entry.tokens))}
             <Text> </Text>
@@ -287,7 +289,7 @@ export const register: Register = on => {
         const max = Math.max(0, ...list.map(x => x.tokens))
         const barW = Math.max(4, W - NAME - NUM - PCT - 4)
         return (
-          <Box flexDirection="column">
+          <Box flexDirection="column" paddingX={PAD}>
             {back({ kind: 'home' })}
             {titleRow(groupLabel(group.id, snap.lang), ofUsed(sum))}
             <Text> </Text>
@@ -375,7 +377,7 @@ export const register: Register = on => {
       const chartMax = Math.max(0, ...shown.map(p => p.tokens))
 
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" paddingX={PAD}>
           {/* three tiles on one grid */}
           <Text>
             {tiles.map((t, i) => (
