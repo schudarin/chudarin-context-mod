@@ -40,6 +40,9 @@ const ru = {
   hintFill: 'Вставить в чат',
   hintHide: 'Скрыть',
   hintSent: '✓ Отправлено Claude',
+  adviceHidden: '✓ Совет скрыт',
+  hideAdvice: 'Скрыть совет',
+  neverShow: 'Не показывать снова',
   hintRan: '✓ Команда запущена',
   speed: (kind: SpeedKind, ratio: number) => {
     if (kind === 'cat') return `${ICON.cat} контекст растёт как обычно`
@@ -118,6 +121,9 @@ const en: typeof ru = {
   hintFill: 'Put in chat',
   hintHide: 'Hide',
   hintSent: '✓ Sent to Claude',
+  adviceHidden: '✓ Advice hidden',
+  hideAdvice: 'Hide advice',
+  neverShow: "Don't show again",
   hintRan: '✓ Command run',
   speed: (kind, ratio) =>
     kind === 'cat'

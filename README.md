@@ -35,7 +35,7 @@ From top to bottom:
 - **A hint.** One line, only when one item is big and you can do something about it: "Bash output
   took 61k. Ask Claude to run tests and go through long logs in a subagent: only the summary comes
   back." "Put in chat" puts a ready request or command in the prompt box; you send it yourself.
-  "Hide" hides the hint until the session ends. Most of the advice comes from Anthropic's [guide to reducing token usage](https://code.claude.com/docs/en/costs#reduce-token-usage).
+  "Hide" hides it for the session; the item page also has "Don't show again". Most of the advice comes from Anthropic's [guide to reducing token usage](https://code.claude.com/docs/en/costs#reduce-token-usage).
 - **What an action costs.** The average price of one screenshot, one file written, one Bash command,
   one skill. This is the part that teaches: you see which habits are expensive.
 - **This session.** Everything the model has read across all requests, how much of it came from

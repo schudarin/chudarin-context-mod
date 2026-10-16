@@ -56,6 +56,8 @@ declare module 'claude-code' {
       hidden: string[]
       // Advice sent to Claude or run as a command this session, by entry id.
       sent: string[]
+      // Advice the person hid for good, by entry id; kept in $.store under `muted`.
+      muted: string[]
     }
   }
 }

@@ -19,6 +19,9 @@ const lang = atom({ plugin: 'chudarin-context-mod', key: 'lang' } as const, 'en'
 const usual = atom({ plugin: 'chudarin-context-mod', key: 'usual' } as const, null)
 const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, [])
 const sent = atom({ plugin: 'chudarin-context-mod', key: 'sent' } as const, [])
+const muted = atom({ plugin: 'chudarin-context-mod', key: 'muted' } as const, [])
+// Store key for advice hidden for good: it outlives sessions.
+const MUTED = 'muted'
 
 // Marks advice as done once its request was sent or its command run: what counts is
 // what reached Claude, not what the panel put in the box.
@@ -30,7 +33,6 @@ async function markDone($: EngineInterface, matches: (prompt: string) => boolean
   if (ids.length === 0) return
   const add = (prev: string[]) => [...prev, ...ids.filter(id => !prev.includes(id))]
   await update($, sent, add)
-  await update($, hidden, add)
 }
 
 const PANE = 'chudarin-context-mod'
@@ -122,6 +124,10 @@ export const register: Register = on => {
     await update($, usual, () => usualRise(others))
     await update($, hidden, () => [])
     await update($, sent, () => [])
+    // Only a list of ids counts; anything else in the store is ignored.
+    const rawMuted = await $.store.get(MUTED)
+    const mutedBefore = Array.isArray(rawMuted) ? rawMuted.filter((x): x is string => typeof x === 'string') : []
+    await update($, muted, () => mutedBefore)
     const { context } = await $.session.usage()
     if (context.tokens !== undefined && !stored?.points.length) {
       const tokens = context.tokens
@@ -278,7 +284,12 @@ export const register: Register = on => {
         </Text>
       )
 
-      const hide = (id: string) => update($, hidden, prev => [...prev, id])
+      // "Don't show again" is for good and kept in the store; there is no way back.
+      const setMuted = async (change: (prev: string[]) => string[]) => {
+        await update($, muted, change)
+        await $.store.set(MUTED, await read($, muted)).catch(err => $.ui.log(`chudarin-context-mod: hidden advice not saved: ${String(err)}`))
+      }
+      const mutedIds = await read($, muted)
       // Adds the request after whatever the person has typed. The hint stays until it is sent.
       const putInChat = (h: { id: string; prompt: string | null }) => async () => {
         if (!h.prompt) return
@@ -286,6 +297,10 @@ export const register: Register = on => {
         await $.prompt.fill({ text: draft.trim() ? ` ${h.prompt}` : h.prompt, mode: draft.trim() ? 'append' : 'replace' })
       }
       const done = await read($, sent)
+      const hiddenIds = await read($, hidden)
+      // Muted for good, sent to Claude this session, hidden by the person this session, or shown.
+      const stateOf = (id: string) =>
+        mutedIds.includes(id) ? 'muted' : done.includes(id) ? 'sent' : hiddenIds.includes(id) ? 'hidden' : 'shown'
 
       // ---- entry page: what it is, why so much, what to do ----
       if (where.kind === 'entry') {
@@ -300,6 +315,7 @@ export const register: Register = on => {
             </Box>
           )
         const average = entry.count ? Math.round(entry.tokens / entry.count) : 0
+        const state = stateOf(entry.id)
         return (
           <Box flexDirection="column" paddingX={PAD}>
             {back(parent)}
@@ -322,19 +338,39 @@ export const register: Register = on => {
                 </Text>
               ))}
             </Box>
-            <Text> </Text>
-            <Text bold>{t.whatToDo}</Text>
-            <Box paddingLeft={2} flexDirection="column">
-              <Text>{help.todo ?? t.nothingToDo}</Text>
-              {help.prompt && done.includes(entry.id) && (
-                <Text dimColor>{help.prompt.startsWith('/') ? t.hintRan : t.hintSent}</Text>
+            {/* advice hidden for good leaves no trace here either */}
+            {state !== 'muted' && (
+              <Box flexDirection="column">
+                <Text> </Text>
+                <Text bold>{t.whatToDo}</Text>
+                <Box paddingLeft={2} flexDirection="column">
+              {/* hidden this session: the mark below stands in for the advice */}
+              {state !== 'hidden' && <Text>{help.todo ?? t.nothingToDo}</Text>}
+              {/* one row of actions; what it holds depends on the advice's state */}
+              {help.todo && (
+                <Box flexDirection="row">
+                  {state === 'sent' && <Text dimColor>{help.prompt?.startsWith('/') ? t.hintRan : t.hintSent}</Text>}
+                  {state === 'hidden' && <Text dimColor>{t.adviceHidden}</Text>}
+                  {state === 'shown' && help.prompt && (
+                    <Button key="entry-fill" plain label={t.hintFill} onPress={putInChat({ id: entry.id, prompt: help.prompt })}>
+                      <Text color="claude">{t.hintFill}</Text>
+                    </Button>
+                  )}
+                  {(state !== 'shown' || help.prompt) && <Text>{'   '}</Text>}
+                  {state === 'shown' ? (
+                    <Button key="entry-hide" plain label={t.hideAdvice} onPress={() => update($, hidden, prev => [...prev, entry.id])}>
+                      <Text dimColor>{t.hideAdvice}</Text>
+                    </Button>
+                  ) : (
+                    <Button key="entry-mute" plain label={t.neverShow} onPress={() => setMuted(prev => [...prev, entry.id])}>
+                      <Text color="claude">{t.neverShow}</Text>
+                    </Button>
+                  )}
+                </Box>
               )}
-              {help.prompt && !done.includes(entry.id) && (
-                <Button key="entry-fill" plain label={t.hintFill} onPress={putInChat({ id: entry.id, prompt: help.prompt })}>
-                  <Text color="claude">{t.hintFill}</Text>
-                </Button>
-              )}
-            </Box>
+                </Box>
+              </Box>
+            )}
           </Box>
         )
       }
@@ -424,7 +460,7 @@ export const register: Register = on => {
         usedGroups.map(g => g.tokens),
         W - (usedGroups.length - 1),
       )
-      const hint = insight(snap.entries, fill, snap.used, snap.lang, await read($, hidden))
+      const hint = insight(snap.entries, fill, snap.used, snap.lang, [...hiddenIds, ...done, ...mutedIds])
       const tempo = speed(points, await read($, usual))
       const prices = snap.prices.slice(0, 6)
       const half = Math.ceil(prices.length / 2)
@@ -519,7 +555,7 @@ export const register: Register = on => {
                   </Button>
                 )}
                 {hint.prompt && <Text>{'   '}</Text>}
-                <Button key="hint-hide" plain label={t.hintHide} onPress={() => hide(hint.id)}>
+                <Button key="hint-hide" plain label={t.hintHide} onPress={() => update($, hidden, prev => [...prev, hint.id])}>
                   <Text dimColor>{t.hintHide}</Text>
                 </Button>
               </Box>

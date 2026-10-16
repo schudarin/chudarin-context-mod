@@ -295,3 +295,77 @@ test('running the advised command counts as done', async ($, on) => {
   await $.command.run({ command: 'mcp', args: '' } as never)
   expect(JSON.stringify(await ui.drawn())).not.toContain('MCP tool schemas took')
 })
+
+for (const stored of [undefined, ['result:Bash']] as const) {
+  test(`hide for the session, then for good (muted before: ${stored ? 'yes' : 'no'})`, async ($, on) => {
+    const bigBash = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'npm test' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'o'.repeat(40_000) }] },
+    ]
+    const categories = [
+      { name: 'Skills', tokens: 1_000, color: 'warning', isDeferred: false, kind: 'used' },
+      { name: 'Messages', tokens: 19_000, color: 'x', isDeferred: false, kind: 'used' },
+      { name: 'Free space', tokens: 980_000, color: 'x', isDeferred: false, kind: 'free' },
+    ]
+    const bashHeavy = { ...usage, context: { ...usage.context, breakdown: { ...usage.context.breakdown, categories } } }
+    const store: Record<string, unknown> = stored ? { muted: [...stored] } : {}
+    on('session.usage', () => ({ value: bashHeavy }) as never)
+    on('session.messages', () => ({ value: bigBash }) as never)
+    on('session.measure', (_$, e) => ({ changed: e.changed }))
+    on('settings.read', () => ({ value: { language: 'English' } }) as never)
+    on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+    on('session.id', () => ({ value: 'test-session' }) as never)
+    on('store.get', (_$, e) => ({ value: store[e.key] }) as never)
+    on('store.keys', () => ({ value: Object.keys(store) }) as never)
+    on('store.set', (_$, e) => {
+      store[e.key] = e.value
+      return { value: undefined } as never
+    })
+    on('store.delete', () => ({ value: undefined }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    on('session.start', (_$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/tmp', surface: 'terminal' } as never)
+    await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+    const ui = await $.ui.mount({
+      plugin: 'chudarin-context-mod',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'chudarin-context-mod',
+      props: props as never,
+    })
+    const drawn = async () => JSON.stringify(await ui.drawn())
+    const openEntry = async () => {
+      await ui.press({ key: 'group-tools' })
+      await ui.press({ key: 'entry-result:Bash' })
+    }
+
+    if (stored) {
+      // Muted in an earlier session: gone from home, and no way back.
+      expect(await drawn()).not.toContain('Bash output took')
+      await openEntry()
+      // Muted advice is gone from the entry page too: no "What to do" block at all.
+      const entry = await drawn()
+      expect(entry).toContain('What it is')
+      expect(entry).not.toContain('What to do')
+      expect(entry).not.toContain('subagent')
+      return
+    }
+
+    expect(await drawn()).toContain('Bash output took')
+    await openEntry()
+    // Hidden for this session: the request button goes, "don't show again" comes.
+    await ui.press({ key: 'entry-hide' })
+    const hiddenNow = await drawn()
+    // The advice itself goes; a mark stands in its place.
+    expect(hiddenNow).toContain('✓ Advice hidden')
+    expect(hiddenNow).not.toContain('subagent')
+    expect(hiddenNow).not.toContain('"Put in chat"')
+    expect(store.muted).toBe(undefined)
+    await ui.press({ key: 'entry-mute' })
+    expect(store.muted).toEqual(['result:Bash'])
+    expect(await drawn()).not.toContain('What to do')
+    await ui.press({ key: 'back' })
+    await ui.press({ key: 'back' })
+    expect(await drawn()).not.toContain('Bash output took')
+  })
+}
