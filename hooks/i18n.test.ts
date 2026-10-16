@@ -37,3 +37,13 @@ test('speed reads as a comparison with the usual pace', () => {
   expect(UI.en.speed('cat', 0.9)).toBe('🐈 context grows at your usual pace')
   expect(UI.en.speed('snail', 0.5)).toBe('🐌 context grows 2× slower than usual')
 })
+
+test('limit forecast reads as time left', () => {
+  expect(UI.ru.limitLeft(70)).toBe('хватит на ~1 ч 10 мин')
+  expect(UI.ru.limitLeft(42)).toBe('хватит на ~40 мин')
+  expect(UI.ru.limitLeft(2)).toBe('хватит на ~5 мин')
+  expect(UI.ru.limitLeft(120)).toBe('хватит на ~2 ч')
+  expect(UI.en.limitLeft(70)).toBe('about 1 h 10 min left')
+  expect(UI.ru.limitUntilReset).toBe('хватит до сброса')
+  expect(UI.en.limitUntilReset).toBe('lasts until reset')
+})

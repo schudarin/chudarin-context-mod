@@ -3,6 +3,8 @@ export type Category = { name: string; tokens: number; color: string; isFree: bo
 export type Item = { name: string; tokens: number }
 export type Point = { tokens: number; turn: number; cause: string | null }
 export type Compact = { turn: number; trigger: string; before: number; after: number }
+// Samples of one rate-limit window, keyed by its reset time.
+export type LimitTrack = { resetsAt: string; samples: { at: number; percent: number }[] }
 
 // One session's running totals, kept in $.store under `session:<id>`.
 export type SessionLog = {
@@ -58,6 +60,8 @@ declare module 'claude-code' {
       sent: string[]
       // Advice the person hid for good, by entry id; kept in $.store under `muted`.
       muted: string[]
+      // Samples of the 5-hour limit in its current window, for the forecast; kept in $.store.
+      limitTrack: LimitTrack | null
     }
   }
 }

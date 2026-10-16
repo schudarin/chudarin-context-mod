@@ -1,5 +1,5 @@
 // Formatting and small maths shared by the panel: no engine calls and no words here.
-import type { Category, Item, Point } from '../types'
+import type { Category, Item, LimitTrack, Point } from '../types'
 
 const BARS = '▁▂▃▄▅▆▇█'
 const EIGHTHS = ' ▁▂▃▄▅▆▇█'
@@ -119,6 +119,28 @@ export function speed(points: readonly Point[], usual: number | null): { kind: S
   const ratio = Math.round((median(recent) / usual) * 100) / 100
   const kind: SpeedKind = ratio < 0.67 ? 'snail' : ratio < 1.5 ? 'cat' : ratio < 2 ? 'rabbit' : 'rocket'
   return { kind, ratio }
+}
+
+const LIMIT_SAMPLES = 300
+const MINUTE = 60_000
+
+// Samples of one limit window; a new reset time starts a new track.
+export function trackLimit(track: LimitTrack | null, resetsAt: string, at: number, percent: number): LimitTrack {
+  const samples = track?.resetsAt === resetsAt ? track.samples : []
+  return { resetsAt, samples: [...samples, { at, percent }].slice(-LIMIT_SAMPLES) }
+}
+
+// When the limit runs out at the pace of the last hour; 'untilReset' when it lasts until the reset.
+// Null until there are at least ten minutes of samples in that hour.
+export function limitForecast(track: LimitTrack, now: number, resetsAt: number): { minutes: number } | 'untilReset' | null {
+  const recent = track.samples.filter(s => s.at >= now - 60 * MINUTE)
+  const first = recent[0]
+  const last = recent[recent.length - 1]
+  if (!first || !last || now - first.at < 10 * MINUTE) return null
+  const perMinute = (last.percent - first.percent) / ((now - first.at) / MINUTE)
+  if (perMinute <= 0) return 'untilReset'
+  const minutes = Math.round((100 - last.percent) / perMinute)
+  return now + minutes * MINUTE >= resetsAt ? 'untilReset' : { minutes }
 }
 
 // The biggest rises from one turn to the next, with what likely caused them.

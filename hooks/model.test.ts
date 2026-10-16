@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, detailsFor, jumps, k, kind, label, pace, resetLabel, shorten, speed, sparkline, usualRise, windowRows } from './model'
+import { chartRows, detailsFor, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, sparkline, trackLimit, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
 
@@ -137,4 +137,28 @@ test('speed compares the last turns with the usual pace', () => {
   expect(speed(steady(1000).points, 1000)).toEqual({ kind: 'cat', ratio: 1 })
   expect(speed(steady(1700).points, 1000)).toEqual({ kind: 'rabbit', ratio: 1.7 })
   expect(speed(steady(3000).points, 1000)).toEqual({ kind: 'rocket', ratio: 3 })
+})
+
+const MIN = 60_000
+
+test('trackLimit starts over when the window resets', () => {
+  const a = trackLimit(null, '2026-10-15T19:00:00', 0, 10)
+  const b = trackLimit(a, '2026-10-15T19:00:00', MIN, 12)
+  expect(b.samples).toEqual([{ at: 0, percent: 10 }, { at: MIN, percent: 12 }])
+  const c = trackLimit(b, '2026-10-16T00:00:00', 2 * MIN, 1)
+  expect(c).toEqual({ resetsAt: '2026-10-16T00:00:00', samples: [{ at: 2 * MIN, percent: 1 }] })
+})
+
+test('limitForecast extrapolates the last hour', () => {
+  const resetFar = 10 * 60 * MIN
+  const track = (pairs: [number, number][]) => ({ resetsAt: 'r', samples: pairs.map(([m, percent]) => ({ at: m * MIN, percent })) })
+  // Too little time to judge.
+  expect(limitForecast(track([[0, 50], [5, 55]]), 5 * MIN, resetFar)).toBe(null)
+  // 50% → 65% in 30 min: 0.5% a minute, 35% left → 70 min.
+  expect(limitForecast(track([[0, 50], [30, 65]]), 30 * MIN, resetFar)).toEqual({ minutes: 70 })
+  // Only the last hour counts: the climb two hours ago is ignored.
+  expect(limitForecast(track([[0, 10], [10, 40], [100, 40], [130, 55]]), 130 * MIN, resetFar)).toEqual({ minutes: 90 })
+  // Flat, or the reset comes first.
+  expect(limitForecast(track([[0, 50], [30, 50]]), 30 * MIN, resetFar)).toBe('untilReset')
+  expect(limitForecast(track([[0, 50], [30, 65]]), 30 * MIN, 60 * MIN)).toBe('untilReset')
 })

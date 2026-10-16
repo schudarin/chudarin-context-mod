@@ -369,3 +369,41 @@ for (const stored of [undefined, ['result:Bash']] as const) {
     expect(await drawn()).not.toContain('Bash output took')
   })
 }
+
+test('the 5-hour tile says how long the limit lasts at this pace', async ($, on) => {
+  let now = Date.parse('2026-10-15T12:00:00')
+  let percent = 50
+  const store: Record<string, unknown> = {}
+  const limited = () => ({
+    ...usage,
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: percent, resetsAt: '2026-10-15T16:00:00' },
+      { kind: 'seven_day', percentUsed: 72, resetsAt: '2026-10-19T10:00:00' },
+    ],
+  })
+  on('session.usage', () => ({ value: limited() }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: now }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  on('store.get', (_$, e) => ({ value: store[e.key] }) as never)
+  on('store.set', (_$, e) => {
+    store[e.key] = e.value
+    return { value: undefined } as never
+  })
+  const measure = () =>
+    $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  await measure()
+  now += 30 * 60_000
+  percent = 65
+  await measure()
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  expect(JSON.stringify(await ui.drawn())).toContain('about 1 h 10 min left')
+})

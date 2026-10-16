@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Page, SessionLog, Snapshot, Step } from '../types'
+import type { LimitTrack, Page, SessionLog, Snapshot, Step } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addPoint, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, detailsFor, jumps, k, label, pace, resetLabel, sparkline, speed, usualRise, windowRows } from './model'
+import { chartRows, detailsFor, jumps, k, label, limitForecast, pace, resetLabel, sparkline, speed, trackLimit, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
@@ -20,6 +20,25 @@ const usual = atom({ plugin: 'chudarin-context-mod', key: 'usual' } as const, nu
 const hidden = atom({ plugin: 'chudarin-context-mod', key: 'hidden' } as const, [])
 const sent = atom({ plugin: 'chudarin-context-mod', key: 'sent' } as const, [])
 const muted = atom({ plugin: 'chudarin-context-mod', key: 'muted' } as const, [])
+const limitTrack = atom({ plugin: 'chudarin-context-mod', key: 'limitTrack' } as const, null)
+// Store key for the 5-hour limit samples: the limit is shared by every session.
+const LIMIT = 'limit:five_hour'
+
+function isTrack(v: unknown): v is LimitTrack {
+  const t = v as LimitTrack | null
+  return !!t && typeof t.resetsAt === 'string' && Array.isArray(t.samples)
+}
+
+// One more sample of the 5-hour limit. The store is merged in, so every session adds to one track.
+async function sampleLimit($: EngineInterface, resetsAt: string, percent: number) {
+  const now = await $.clock.now()
+  const stored = await $.store.get(LIMIT).catch(() => undefined)
+  const own = await read($, limitTrack)
+  const base = isTrack(stored) && (!own || stored.samples.length >= own.samples.length) ? stored : own
+  const next = trackLimit(base, resetsAt, now, percent)
+  await update($, limitTrack, () => next)
+  await $.store.set(LIMIT, next).catch(err => $.ui.log(`chudarin-context-mod: limit samples not saved: ${String(err)}`))
+}
 // Store key for advice hidden for good: it outlives sessions.
 const MUTED = 'muted'
 
@@ -100,6 +119,8 @@ async function refresh($: EngineInterface) {
     used: entries.reduce((n, e) => n + e.tokens, 0),
   }
   await update($, snapshot, () => next)
+  const five = usage.rateLimits.find(r => /five_hour/.test(r.kind) && !/fable/i.test(r.kind))
+  if (five?.resetsAt) await sampleLimit($, five.resetsAt, five.percentUsed)
 }
 
 export const register: Register = on => {
@@ -420,6 +441,10 @@ export const register: Register = on => {
       const turnsLeft = v.recent > 0 ? Math.floor((snap.threshold - total) / v.recent) : null
       const limit = (re: RegExp) => snap.limits.find(l => re.test(l.kind) && !/fable/i.test(l.kind))
       const five = limit(/five_hour/)
+      const track = await read($, limitTrack)
+      const forecast =
+        five?.resetsAt && track?.resetsAt === five.resetsAt ? limitForecast(track, now, Date.parse(five.resetsAt)) : null
+      const fiveForecast = forecast === null ? '' : forecast === 'untilReset' ? t.limitUntilReset : t.limitLeft(forecast.minutes)
       const week = limit(/seven_day/)
       const tiles = [
         {
@@ -434,7 +459,7 @@ export const register: Register = on => {
                 title: t.tile5h,
                 percent: five.percentUsed,
                 level: levelOf(five.percentUsed, 70, 90),
-                lines: [five.resetsAt ? t.resets(resetLabel(five.resetsAt, now)) : '', ''],
+                lines: [five.resetsAt ? t.resets(resetLabel(five.resetsAt, now)) : '', fiveForecast],
               },
             ]
           : []),

@@ -4,6 +4,14 @@ export type Lang = 'ru' | 'en'
 
 type SpeedKind = 'snail' | 'cat' | 'rabbit' | 'rocket'
 const ICON: Record<SpeedKind, string> = { snail: '🐌', cat: '🐈', rabbit: '🐇', rocket: '🚀' }
+// Minutes, rounded for a forecast: to 5 under an hour, to 10 above.
+const roundMinutes = (m: number) => (m < 60 ? Math.max(5, Math.round(m / 5) * 5) : Math.round(m / 10) * 10)
+const duration = (m: number, h: string, min: string) => {
+  const r = roundMinutes(m)
+  const hours = Math.floor(r / 60)
+  const rest = r % 60
+  return [hours ? `${hours} ${h}` : '', rest ? `${rest} ${min}` : ''].filter(Boolean).join(' ')
+}
 // How many times faster or slower, to one decimal: 1.74 → 1.7, 0.5 → 2.
 const times = (ratio: number) => Math.round((ratio >= 1 ? ratio : 1 / ratio) * 10) / 10
 
@@ -37,6 +45,8 @@ const ru = {
   tileWeek: 'ЛИМИТ НЕДЕЛЯ',
   ofWindow: (used: string, window: string) => `${used} из ${window}`,
   turnsLeft: (n: number) => `хватит на ~${n} ходов`,
+  limitLeft: (minutes: number) => `хватит на ~${duration(minutes, 'ч', 'мин')}`,
+  limitUntilReset: 'хватит до сброса',
   hintFill: 'Вставить в чат',
   hintHide: 'Скрыть',
   hintSent: '✓ Отправлено Claude',
@@ -118,6 +128,8 @@ const en: typeof ru = {
   tileWeek: 'WEEKLY LIMIT',
   ofWindow: (used, window) => `${used} of ${window}`,
   turnsLeft: n => `about ${n} turns left`,
+  limitLeft: minutes => `about ${duration(minutes, 'h', 'min')} left`,
+  limitUntilReset: 'lasts until reset',
   hintFill: 'Put in chat',
   hintHide: 'Hide',
   hintSent: '✓ Sent to Claude',
