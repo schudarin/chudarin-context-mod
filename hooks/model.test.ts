@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { chartRows, clip, detail, detailsFor, fitCell, joinLines, nameWidth, priceGrid, wrapLines, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { chartRows, clip, lineSvg, sentenceCase, detail, detailsFor, fitCell, joinLines, nameWidth, priceGrid, wrapLines, jumps, k, kind, label, limitForecast, pace, resetLabel, shorten, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const pt = (tokens: number, turn: number) => ({ tokens, turn, cause: null })
 
@@ -208,4 +208,56 @@ test('joinLines joins parts with a dot and wraps them; a line never starts with 
   // Empty parts leave no stray dot.
   expect(joinLines(['resets 19:00', ''], 36)).toEqual(['resets 19:00'])
   expect(joinLines(['', ''], 36)).toEqual([])
+})
+
+// The rects of an SVG source as plain objects, to check without matching the markup's layout.
+const rects = (source: string) =>
+  [...source.matchAll(/<rect ([^>]*)\/>/g)].map(m =>
+    Object.fromEntries([...m[1]!.matchAll(/([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]])),
+  )
+
+// ---- the desktop's graphics: wide markup drawn with no width, so it fills its slot ----
+
+test('lineSvg fills its share of a wide strip, the rest a faint track', () => {
+  const half = lineSvg(0.5, '#123456', { track: true })
+  expect(half).toMatch(/^<svg [^>]*viewBox="0 0 1000 10"[^>]*preserveAspectRatio="none"/)
+  const [track, fill] = rects(half)
+  expect(Number(track!.width)).toBe(1000)
+  expect(track!['fill-opacity']).toBe('0.25')
+  expect(fill!.fill).toBe('#123456')
+  expect(Number(fill!.width)).toBe(500)
+  // Nothing used: the track alone. A sliver still shows; more than full stops at the end.
+  expect(rects(lineSvg(0, '#123456', { track: true })).length).toBe(1)
+  expect(Number(rects(lineSvg(0.0001, '#123456'))[0]!.width)).toBeGreaterThan(0)
+  expect(Number(rects(lineSvg(1.5, '#123456'))[0]!.width)).toBe(1000)
+  // A piece of the stacked bar is drawn translucent, so its lit background shows through.
+  expect(rects(lineSvg(1, '#123456', { opacity: 0.7 }))[0]!['fill-opacity']).toBe('0.7')
+})
+
+test('sentenceCase turns a title set in capitals into a sentence, and leaves others alone', () => {
+  expect(sentenceCase('5-HOUR LIMIT')).toBe('5-hour limit')
+  expect(sentenceCase('ЛИМИТ НЕДЕЛЯ')).toBe('Лимит неделя')
+  expect(sentenceCase('What fills the context')).toBe('What fills the context')
+})
+
+test('a server id that is a UUID shows as its first 8 characters in kinds and labels, not in the whole text', () => {
+  const tool = 'mcp__9427d561-bb31-414e-9bb9-bb8f652839bb__search'
+  expect(kind(tool)).toBe('MCP 9427d561')
+  expect(label({ tool, query: 'pricing' })).toBe('9427d561:search pricing')
+  // The whole text keeps the full id, so it is still reachable.
+  expect(detail({ tool, query: 'pricing' })).toContain('9427d561-bb31-414e-9bb9-bb8f652839bb')
+  // A UUID inside a longer name is shortened too; other names stay as they are.
+  expect(kind('mcp__plugin_9427d561-bb31-414e-9bb9-bb8f652839bb__search')).toBe('MCP plugin_9427d561')
+  expect(kind('mcp__linear__list_issues')).toBe('MCP linear')
+  expect(kind('mcp__claude_ai_Gmail__search')).toBe('MCP claude_ai_Gmail')
+})
+
+test('detailsFor shortens a UUID server name in MCP tool rows', () => {
+  const rows = detailsFor({
+    categories: [{ name: 'MCP tools', tokens: 100 }],
+    memoryFiles: [], agents: [],
+    mcpTools: [{ name: 'search', serverName: '9427d561-bb31-414e-9bb9-bb8f652839bb', tokens: 100, isLoaded: true }],
+  } as never)
+  expect(JSON.stringify(rows)).toContain('9427d561: search')
+  expect(JSON.stringify(rows)).not.toContain('bb8f652839bb')
 })

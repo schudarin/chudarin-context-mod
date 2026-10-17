@@ -74,8 +74,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
       })
       const drawn = async () => JSON.stringify(await ui.drawn())
 
+      // The desktop sets titles in sentence case, as its own panels do; the terminal in capitals.
+      const cased = (title: string) => (surface === 'terminal' ? title : title[0] + title.slice(1).toLowerCase())
       const home = await drawn()
-      expect(home).toContain(w.week)
+      expect(home).toContain(cased(w.week))
       expect(home).toContain(w.group)
       expect(home).toContain(w.price)
 
@@ -89,9 +91,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(entry).toContain('npm test')
 
       await ui.press({ key: 'back' })
-      expect(await drawn()).toContain(w.groupTitle)
+      expect(await drawn()).toContain(cased(w.groupTitle))
       await ui.press({ key: 'back' })
-      expect(await drawn()).toContain(w.home)
+      expect(await drawn()).toContain(cased(w.home))
     })
   }
 }
@@ -432,6 +434,8 @@ test('the chart block keeps the chart, jumps and compactions, and nothing double
   on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
   on('session.id', () => ({ value: 'test-session' }) as never)
   await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  // Two points: the chart has a rise to draw.
+  await $.session.measure({ context: { tokens: 25_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
   const ui = await $.ui.mount({
     plugin: 'chudarin-context-mod',
     surface: 'terminal',
@@ -1179,10 +1183,46 @@ test('a wide pane keeps the one-row legend', async (...env) => {
 
 // ---- the desktop draws a proportional face: every Text asks for the monospaced one ----
 
-test('on the desktop every Text is monospaced and no Button label is a bare string', async ($, on) => {
-  const command = 'npm run build -- --filter @scope/a-very-long-package-name --verbose --no-cache'
-  on('session.usage', () => ({ value: usage }) as never)
-  on('session.messages', () => ({ value: messages }) as never)
+// ---- the desktop: its own layout in the host's font, columns as Boxes, graphics as Svg ----
+
+type DNode = { type?: string; props?: Record<string, unknown>; hover?: { scope?: string }; children?: unknown[] }
+
+// Every element of a drawn tree with its parent, depth first.
+const elements = (tree: unknown): { node: DNode; parent: DNode | null }[] => {
+  const out: { node: DNode; parent: DNode | null }[] = []
+  const walk = (n: unknown, parent: DNode | null) => {
+    if (!n || typeof n !== 'object') return
+    const node = n as DNode
+    out.push({ node, parent })
+    for (const c of node.children ?? []) walk(c, node)
+  }
+  walk(tree, null)
+  return out
+}
+// Every string drawn, as it sits in the tree.
+const strings = (tree: unknown): string[] => {
+  const out: string[] = []
+  const walk = (n: unknown) => {
+    if (typeof n === 'string') out.push(n)
+    else if (n && typeof n === 'object') for (const c of (n as DNode).children ?? []) walk(c)
+  }
+  walk(tree)
+  return out
+}
+
+// The English desktop pane at `bodyColumns`, after three turns and a long Bash call; `pages` walks it:
+// home, home with the chart and a jump open, the tool group, the Bash entry. With `hint`, Bash output
+// fills most of the context, so the panel has advice to give.
+async function desktopAt([$, on]: Parameters<TestBody>, bodyColumns: number, hint = false) {
+  const categories = [
+    { name: 'Skills', tokens: 1_000, color: 'warning', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 19_000, color: 'x', isDeferred: false, kind: 'used' },
+    { name: 'Free space', tokens: 980_000, color: 'x', isDeferred: false, kind: 'free' },
+  ]
+  const heavy = { ...usage, context: { ...usage.context, breakdown: { ...usage.context.breakdown, categories } } }
+  const bigBash = [messages[0], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'o'.repeat(40_000) }] }]
+  on('session.usage', () => ({ value: hint ? heavy : usage }) as never)
+  on('session.messages', () => ({ value: hint ? bigBash : messages }) as never)
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('settings.read', () => ({ value: { language: 'English' } }) as never)
   on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
@@ -1193,51 +1233,182 @@ test('on the desktop every Text is monospaced and no Button label is a bare stri
     $.session.measure({ context: { tokens, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
   await measure(20_000)
   await measure(25_000)
-  await $.tool.call({ tool: 'Bash', command } as never)
+  await $.tool.call({ tool: 'Bash', command: 'npm run build -- --filter @scope/a-very-long-package-name --verbose --no-cache' } as never)
   await measure(70_000)
-  // Every Text in the tree that isn't monospaced, and every string a Button holds outside a Text.
-  const check = (tree: unknown) => {
-    type Node = { type?: string; props?: { mono?: boolean }; children?: unknown[] }
-    const plain: string[] = []
-    const bare: string[] = []
-    const walk = (n: unknown) => {
-      if (!n || typeof n !== 'object') return
-      const node = n as Node
-      if (node.type === 'Text' && node.props?.mono !== true) plain.push(shownText(node))
-      if (node.type === 'Button') for (const c of node.children ?? []) if (typeof c === 'string') bare.push(c)
-      for (const c of node.children ?? []) walk(c)
-    }
-    walk(tree)
-    return { plain, bare }
-  }
-  for (const bodyColumns of [72, 40]) {
-    const ui = await $.ui.mount({
-      plugin: 'chudarin-context-mod',
-      surface: 'desktop',
-      component: 'Pane',
-      requestId: 'chudarin-context-mod',
-      props: { ...props, bodyColumns } as never,
-    })
-    const pages: unknown[] = [await ui.drawn()]
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: { ...props, bodyColumns } as never,
+  })
+  const pages = async () => {
+    const home = await ui.drawn()
     await ui.press({ key: 'block-dynamics' })
     await ui.press({ key: 'jump-3' })
-    pages.push(await ui.drawn())
+    const chart = await ui.drawn()
     await ui.press({ key: 'group-tools' })
-    pages.push(await ui.drawn())
+    const group = await ui.drawn()
     await ui.press({ key: 'entry-result:Bash' })
-    pages.push(await ui.drawn())
-    expect(JSON.stringify(pages)).toContain('--no-cache')
-    for (const page of pages) expect(check(page)).toEqual({ plain: [], bare: [] })
-    // Back home with the chart folded, for the next width.
-    await ui.press({ key: 'back' })
-    await ui.press({ key: 'back' })
-    await ui.press({ key: 'jump-3' })
-    await ui.press({ key: 'block-dynamics' })
-    await ui.unmount()
+    const entry = await ui.drawn()
+    return { home, chart, group, entry }
   }
-})
+  return { ui, pages }
+}
 
-test('a pane with no data yet is monospaced on the desktop too', async ($, on) => {
+// A figure in a table: tokens, a share, a delta, a count.
+const FIGURE = /^[+−-]?\d[\d.,]*[kM]?%?$|^×\d+$/
+
+for (const bodyColumns of [72, 40]) {
+  for (const hint of [false, true])
+  test(`desktop: the host's font, no space-padded columns, no empty rows (${bodyColumns} columns${hint ? ', with a hint' : ''})`, async (...env) => {
+    const { pages } = await desktopAt(env, bodyColumns, hint)
+    const all = await pages()
+    // The opened jump shows the whole command; with advice to give, home shows the hint.
+    expect(JSON.stringify(all.chart)).toContain('--no-cache')
+    if (hint) expect(JSON.stringify(all.home)).toContain('hint-fill')
+    for (const page of Object.values(all)) {
+      const els = elements(page)
+      // No Text asks for the monospaced face.
+      expect(els.filter(e => e.node.type === 'Text' && e.node.props?.mono !== undefined).length).toBe(0)
+      // A Button's label is a Text, never a bare string.
+      expect(els.filter(e => e.node.type === 'Button' && (e.node.children ?? []).some(c => typeof c === 'string')).length).toBe(0)
+      // Columns are Boxes and gaps are spacing: no run of spaces, no padding at a string's ends, no blank line.
+      const padded = strings(page).filter(t => /\s{2,}|^\s|\s$/.test(t))
+      expect(padded).toEqual([])
+      // No block glyphs: meters, bars and the chart are Svg.
+      expect(strings(page).filter(t => /[▁▂▃▄▅▆▇█·]{2,}/.test(t))).toEqual([])
+    }
+  })
+
+  test(`desktop: every figure in a table is tabular, right-aligned in a fixed-width Box (${bodyColumns} columns)`, async (...env) => {
+    const { pages } = await desktopAt(env, bodyColumns)
+    const all = await pages()
+    for (const page of Object.values(all)) {
+      const figures = elements(page).filter(e => e.node.type === 'Text' && FIGURE.test(strings(e.node).join('')))
+      expect(figures.length).toBeGreaterThan(0)
+      for (const { node, parent } of figures) {
+        expect(node.props?.tabular).toBe(true)
+        // The tiles' big percent stands alone; every other figure sits in a column.
+        if (node.props?.size === 'title') continue
+        expect(parent?.type).toBe('Box')
+        expect(typeof parent?.props?.width).toBe('number')
+        expect([parent?.props?.justifyContent, parent?.props?.alignItems]).toContain('flex-end')
+      }
+    }
+    // The tables hold their figures: what fills the context, action costs, the jumps, the group's entries.
+    const shown = (page: unknown) => elements(page).filter(e => e.node.type === 'Text' && FIGURE.test(strings(e.node).join(''))).map(e => strings(e.node).join(''))
+    expect(shown(all.home)).toEqual(expect.arrayContaining(['10k', '50%', '×1']))
+    expect(shown(all.chart)).toEqual(expect.arrayContaining(['+45k']))
+    expect(shown(all.group).length).toBeGreaterThanOrEqual(2)
+  })
+
+  test(`desktop: tiles are cards with a big percent and an Svg meter (${bodyColumns} columns)`, async (...env) => {
+    const { ui } = await desktopAt(env, bodyColumns)
+    const home = await ui.drawn()
+    const els = elements(home)
+    const cards = els.filter(e => e.node.type === 'Box' && e.node.props?.borderStyle !== undefined)
+    expect(cards.length).toBe(3)
+    // Side by side when there is room, one under another when the pane is narrow.
+    const row = cards[0]!.parent
+    expect(cards.every(c => c.parent === row)).toBe(true)
+    expect(row?.props?.flexDirection).toBe(bodyColumns >= 52 ? 'row' : 'column')
+    for (const card of cards) {
+      const inside = elements(card.node)
+      const big = inside.filter(e => e.node.type === 'Text' && e.node.props?.size === 'title')
+      expect(big.length).toBe(1)
+      expect(strings(big[0]!.node).join('')).toMatch(/^\d+%$/)
+      expect(inside.filter(e => e.node.type === 'Svg').length).toBe(1)
+    }
+    // Titles in sentence case, not in capitals.
+    const text = JSON.stringify(home)
+    expect(text).toContain('"Context"')
+    expect(text).toContain('5-hour limit')
+    expect(text).not.toContain('WHAT FILLS')
+    expect(text).toContain('What fills the context')
+  })
+
+  test(`desktop: the graphics are Svg sized in pixels, the chart bounded in height (${bodyColumns} columns)`, async (...env) => {
+    const { pages } = await desktopAt(env, bodyColumns)
+    const all = await pages()
+    const svgs = (page: unknown) => elements(page).filter(e => e.node.type === 'Svg')
+    for (const page of Object.values(all))
+      for (const { node, parent } of svgs(page)) {
+        expect(String(node.props?.source).length).toBeLessThanOrEqual(131_072)
+        expect(String(node.props?.alt).length).toBeGreaterThan(0)
+        // Drawn with no width, so it fills its slot; the height in pixels, never in cells.
+        expect(node.props?.width).toBeUndefined()
+        expect(typeof node.props?.height).toBe('number')
+        expect(parent?.props?.height).toBeUndefined()
+      }
+    // Three meters, then the stacked bar: one piece per group in use, each lighting with its row.
+    const home = svgs(all.home)
+    expect(home.length).toBe(5)
+    const pieces = home.slice(3)
+    expect(pieces.map(p => p.parent?.hover?.scope)).toEqual(['group-tools', 'group-rules'])
+    expect(pieces.every(p => /%$/.test(String(p.parent?.props?.width)))).toBe(true)
+    // The chart is drawn in Boxes, not Svg: a lit column must take the lit color whole, and an Svg
+    // can't be restyled by a hover, only the Box behind it.
+    expect(svgs(all.chart).length).toBe(5)
+    const els = elements(all.chart)
+    // A column is a colored Box whose height is its share of the biggest rise, in a box of fixed rows.
+    const columns = els.filter(e => e.node.type === 'Box' && e.node.props?.backgroundColor === '#5769f7')
+    expect(columns.length).toBe(2)
+    for (const c of columns) {
+      expect(String(c.node.props?.height)).toMatch(/^\d+%$/)
+      expect(c.node.children ?? []).toEqual([])
+    }
+    const plot = columns[0]!.parent && els.find(e => e.node === columns[0]!.parent)?.parent
+    expect(typeof plot?.props?.height).toBe('number')
+    expect(Number(plot?.props?.height)).toBeGreaterThanOrEqual(3)
+    expect(Number(plot?.props?.height)).toBeLessThanOrEqual(8)
+    // The biggest jump's column lights itself in the accent; its row in the list lights with it.
+    const peak = columns.find(c => c.node.hover?.scope === 'peak-1')
+    expect(peak?.node.hover).toEqual({ scope: 'peak-1', backgroundColor: 'claude' })
+    expect(peak?.node.props?.height).toBe('100%')
+    expect(els.some(e => e.node.type === 'Text' && e.node.hover?.scope === 'peak-1')).toBe(true)
+    // The group page draws a bar per entry only where there is room.
+    expect(svgs(all.group).length).toBe(bodyColumns >= 52 ? 2 : 0)
+  })
+
+  test(`desktop: rows, hint, back link (${bodyColumns} columns)`, async (...env) => {
+    const { ui, pages } = await desktopAt(env, bodyColumns, true)
+    const home = await ui.drawn()
+    const els = elements(home)
+    // A legend row: the dot, the name that opens the group, the figures, all in one hover group.
+    const lit = els.filter(e => e.node.type === 'Text' && e.node.hover?.scope === 'group-tools')
+    expect(lit.length).toBeGreaterThanOrEqual(3)
+    const name = els.find(e => e.node.type === 'Button' && e.node.props?.key === 'group-tools')
+    expect(name?.parent?.props?.flexGrow).toBe(1)
+    // The hint: the arrow on the first line, then the text, then both buttons; "Hide advice", as on
+    // the entry page.
+    const fill = els.find(e => e.node.type === 'Button' && e.node.props?.key === 'hint-fill')
+    const hideHint = els.find(e => e.node.type === 'Button' && e.node.props?.key === 'hint-hide')
+    expect(hideHint?.node.props?.label).toBe('Hide advice')
+    const hint = els.find(e => e.node.type === 'Box' && e.node.props?.alignItems === 'flex-start' && elements(e.node).some(x => x.node === fill?.node))
+    expect(hint).toBeDefined()
+    expect(strings((hint!.node.children ?? [])[0]).join('')).toBe('→')
+    // Sections are spaced by the root's gap, not by empty lines; the page padding is `md` all round.
+    expect((home as DNode).props?.gap).toBeDefined()
+    // The figure columns of "What fills the context" and "Action costs" share their right edge:
+    // from the right, a mark cell, then the share or count, then tokens or average.
+    const tail = (row: DNode) => (row.children as DNode[]).slice(-3).map(c => c.props?.width)
+    const groupRow = els.find(e => e.node.props?.key === 'row-tools')!.node
+    const priceRow = els.find(e => e.node.type === 'Box' && e.node.props?.flexDirection === 'row' && strings(e.node).includes('Bash command'))!.node
+    expect(tail(priceRow)).toEqual(tail(groupRow))
+    const all = await pages()
+    for (const page of Object.values(all)) expect((page as DNode).props?.padding).toBe('md')
+    // On the group and entry pages the back link is a line of its own, first.
+    for (const page of [all.group, all.entry]) {
+      const first = ((page as DNode).children ?? [])[0] as DNode
+      const back = first.type === 'Button' ? first : (first.children ?? [])[0] as DNode
+      expect(back.props?.key).toBe('back')
+      expect(first.type === 'Button' || (first.children ?? []).length === 1).toBe(true)
+    }
+  })
+}
+
+test('desktop: a pane with no data yet sits inside the page padding', async ($, on) => {
   on('clock.now', () => ({ value: 0 }) as never)
   const ui = await $.ui.mount({
     plugin: 'chudarin-context-mod',
@@ -1246,5 +1417,260 @@ test('a pane with no data yet is monospaced on the desktop too', async ($, on) =
     requestId: 'chudarin-context-mod',
     props: props as never,
   })
-  expect(await ui.drawn()).toMatchObject({ type: 'Text', props: { mono: true } })
+  const drawn = (await ui.drawn()) as DNode
+  expect(drawn.type).toBe('Box')
+  expect(drawn.props?.padding).toBe('md')
+  expect(strings(drawn).join('')).toBe('No data until the first reply.')
 })
+
+// A press that changes the page removes the Button that held the focus. On the desktop the ring is
+// handed to the new page's first stop, so the pane keeps the keyboard and the next click presses.
+// The test engine has no focus ring (its `ui.focus` is unimplemented), so the asks are read off the
+// debug log, where the mod says what came of each.
+const focusAsks = (on: Parameters<TestBody>[1]) => {
+  const asked: string[] = []
+  on('ui.log', (_$, e) => {
+    const m = /focus to (\S+):/.exec(e.text)
+    if (m && e.to === 'debug') asked.push(m[1]!)
+    return { value: undefined } as never
+  })
+  return asked
+}
+
+test('desktop: a press that changes the page puts the ring on the new page', async (...env) => {
+  const asked = focusAsks(env[1])
+  const { ui } = await desktopAt(env, 72)
+  await ui.press({ key: 'group-tools' })
+  await ui.press({ key: 'entry-result:Bash' })
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'back' })
+  expect(asked).toEqual(['back', 'back', 'entry-result:Bash', 'group-tools'])
+})
+
+test('terminal: a press that changes the page leaves the ring to the engine, as before', async (...env) => {
+  const asked = focusAsks(env[1])
+  const ui = await mountAt(env, 72)
+  await ui.press({ key: 'group-tools' })
+  await ui.press({ key: 'back' })
+  expect(asked).toEqual([])
+})
+
+// The 5-hour and weekly figures come with model replies; a reading without them (an idle refresh)
+// must not drop the cards while the session block still shows what was spent.
+test('desktop: the limit cards stay when a later reading brings no limits', async ($, on) => {
+  let rateLimits = usage.rateLimits
+  on('session.usage', () => ({ value: { ...usage, rateLimits } }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  const measure = (tokens: number) =>
+    $.session.measure({ context: { tokens, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  await measure(20_000)
+  rateLimits = []
+  await measure(25_000)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  const home = await ui.drawn()
+  expect(elements(home).filter(e => e.node.type === 'Box' && e.node.props?.borderStyle !== undefined).length).toBe(3)
+  const text = strings(home)
+  expect(text).toContain('5-hour limit')
+  expect(text).toContain('72%')
+})
+
+// A name longer than its column: it is cut there, and its column can shrink, so the figures stay put.
+for (const bodyColumns of [72, 40])
+  test(`desktop: a long name stays in its column on the group page (${bodyColumns} columns)`, async ($, on) => {
+    const tool = 'mcp__a-very-long-server-name-that-keeps-going-and-going-and-going__search'
+    const mcp = [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'm1', name: tool, input: { query: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'm1', content: 'o'.repeat(4000) }] },
+    ]
+    on('session.usage', () => ({ value: usage }) as never)
+    on('session.messages', () => ({ value: mcp }) as never)
+    on('session.measure', (_$, e) => ({ changed: e.changed }))
+    on('settings.read', () => ({ value: { language: 'English' } }) as never)
+    on('clock.now', () => ({ value: Date.parse('2026-10-15T12:00:00') }) as never)
+    on('session.id', () => ({ value: 'test-session' }) as never)
+    await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+    const ui = await $.ui.mount({
+      plugin: 'chudarin-context-mod',
+      surface: 'desktop',
+      component: 'Pane',
+      requestId: 'chudarin-context-mod',
+      props: { ...props, bodyColumns } as never,
+    })
+    await ui.press({ key: 'group-tools' })
+    const els = elements(await ui.drawn())
+    const full = 'MCP a-very-long-server-name-that-keeps-going-and-going-and-going replies'
+    const button = els.find(e => e.node.type === 'Button' && e.node.props?.label === full)
+    expect(button).toBeDefined()
+    // The name's Box may shrink below its text and clips what overflows.
+    expect(button!.parent?.props?.minWidth).toBe(0)
+    expect(button!.parent?.props?.overflow).toBe('hidden')
+    // What is drawn fits the name column (the row less the figures, the bar, the mark and the gaps).
+    const shown = strings(button!.node).join('')
+    expect(shown.endsWith('…')).toBe(true)
+    expect(shown.length).toBeLessThanOrEqual(bodyColumns - 4 - 6 - 5 - 1 - 4 - (bodyColumns >= 52 ? 11 : 0))
+  })
+
+// ---- desktop: actions look like actions ----
+
+// The Buttons of a drawn tree by key: their props.
+const buttons = (tree: unknown) =>
+  Object.fromEntries(elements(tree).filter(e => e.node.type === 'Button').map(e => [String(e.node.props?.key), e.node.props ?? {}]))
+
+test('desktop: "Put in chat" is the one primary action, hiding is a secondary button, back is a dim link', async (...env) => {
+  const { ui } = await desktopAt(env, 72, true)
+  // Home: the hint's two actions are buttons with chrome; one primary on the screen.
+  const home = buttons(await ui.drawn())
+  expect(home['hint-fill']).toMatchObject({ variant: 'primary', label: 'Put in chat' })
+  expect(home['hint-fill']!.plain).toBeUndefined()
+  expect(home['hint-hide']).toMatchObject({ variant: 'secondary', label: 'Hide advice' })
+  expect(home['hint-hide']!.plain).toBeUndefined()
+  expect(Object.values(home).filter(b => b.variant === 'primary').length).toBe(1)
+  // Rows that open a page stay link-like.
+  expect(home['group-tools']!.plain).toBe(true)
+  // The entry page: the same two, then "Don't show again" as a secondary button once hidden.
+  await ui.press({ key: 'group-tools' })
+  const group = buttons(await ui.drawn())
+  expect(group['back']).toMatchObject({ plain: true, dimColor: true, label: '← Back' })
+  await ui.press({ key: 'entry-result:Bash' })
+  const entry = buttons(await ui.drawn())
+  expect(entry['entry-fill']).toMatchObject({ variant: 'primary' })
+  expect(entry['entry-hide']).toMatchObject({ variant: 'secondary', label: 'Hide advice' })
+  expect(entry['entry-fill']!.plain).toBeUndefined()
+  expect(entry['entry-hide']!.plain).toBeUndefined()
+  expect(entry['back']).toMatchObject({ plain: true, dimColor: true })
+  expect(Object.values(entry).filter(b => b.variant === 'primary').length).toBe(1)
+  await ui.press({ key: 'entry-hide' })
+  const hidden = buttons(await ui.drawn())
+  expect(hidden['entry-mute']).toMatchObject({ variant: 'secondary', label: "Don't show again" })
+  expect(hidden['entry-mute']!.plain).toBeUndefined()
+})
+
+test('desktop: "Refresh" on stale data is a secondary button', async ($, on) => {
+  let now = Date.parse('2026-10-15T12:00:00')
+  on('session.usage', () => ({ value: usage }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('clock.now', () => ({ value: now }) as never)
+  on('session.id', () => ({ value: 'test-session' }) as never)
+  await $.session.measure({ context: { tokens: 20_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'desktop',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: props as never,
+  })
+  now = Date.parse('2026-10-15T12:07:00')
+  await ui.redraw()
+  const refresh = buttons(await ui.drawn()).refresh
+  expect(refresh).toMatchObject({ variant: 'secondary', label: 'Refresh' })
+  expect(refresh!.plain).toBeUndefined()
+})
+
+// ---- what a session starts with: account-wide limits, its own log, a chart only with two points ----
+
+// A session started at `now`, launched at `launch` (a resumed conversation's first launch), with the
+// store holding `stored` and no limit reading yet: what the engine has right after a restart.
+async function startAt(
+  [$, on]: Parameters<TestBody>,
+  opts: { id?: string; launch?: number; stored?: Record<string, unknown>; rateLimits?: unknown[]; tokens?: number } = {},
+) {
+  const now = Date.parse('2026-10-17T19:20:00')
+  mock.clock(on, { now })
+  const reading = { ...usage, startedAt: opts.launch ?? now, rateLimits: opts.rateLimits ?? [] }
+  on('session.usage', () => ({ value: { ...reading, context: { ...reading.context, tokens: opts.tokens ?? 711_000 } } }) as never)
+  on('session.messages', () => ({ value: messages }) as never)
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('settings.read', () => ({ value: { language: 'English' } }) as never)
+  on('session.id', () => ({ value: opts.id ?? 'new' }) as never)
+  // The store as a record the test reads; its keys keep insertion order, as the engine's do.
+  const store: Record<string, unknown> = { ...(opts.stored ?? {}) }
+  on('store.get', (_$, e) => ({ value: store[e.key] }) as never)
+  on('store.keys', () => ({ value: Object.keys(store) }) as never)
+  on('store.set', (_$, e) => {
+    store[e.key] = e.value
+    return { value: undefined } as never
+  })
+  on('store.delete', (_$, e) => {
+    delete store[e.key]
+    return { value: undefined } as never
+  })
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/tmp', surface: 'desktop', isInteractive: true } as never)
+  const mount = (surface: 'desktop' | 'terminal') =>
+    $.ui.mount({ plugin: 'chudarin-context-mod', surface, component: 'Pane', requestId: 'chudarin-context-mod', props: props as never })
+  return { mount, store }
+}
+
+const LAST_LIMITS = {
+  five_hour: { percentUsed: 5, resetsAt: '2026-10-17T20:50:00' },
+  seven_day: { percentUsed: 72, resetsAt: '2026-10-19T10:00:00' },
+}
+
+for (const surface of ['desktop', 'terminal'] as const)
+  test(`limits are account-wide: right after start the last stored figures show (${surface})`, async (...env) => {
+    const { mount } = await startAt(env, { stored: { 'limits:last': LAST_LIMITS } })
+    const text = JSON.stringify(await (await mount(surface)).drawn())
+    expect(text).toContain(surface === 'desktop' ? '5-hour limit' : '5-HOUR LIMIT')
+    expect(text).toContain('72%')
+  })
+
+test('a reading with limits stores them for every later session', async (...env) => {
+  const { store } = await startAt(env, { rateLimits: usage.rateLimits })
+  expect(store['limits:last']).toEqual({
+    five_hour: { percentUsed: 5, resetsAt: '2026-10-15T19:00:00' },
+    seven_day: { percentUsed: 72, resetsAt: '2026-10-19T10:00:00' },
+  })
+})
+
+const LAUNCH = Date.parse('2026-10-15T17:09:00')
+const OLD_LOG = {
+  startedAt: LAUNCH + 20_000, requests: 595, read: 0, cached: 0, written: 0, compacts: [], prompts: 72, limits: {},
+  points: [{ tokens: 611_000, turn: 1, cause: null }, { tokens: 702_000, turn: 263, cause: null }],
+}
+
+test('a conversation resumed under a new session id picks up its own log', async (...env) => {
+  const { mount, store } = await startAt(env, { id: 'new', launch: LAUNCH, stored: { 'session:old': OLD_LOG } })
+  const text = JSON.stringify(await (await mount('desktop')).drawn())
+  expect(text).toContain('This session')
+  expect((store['session:new'] as SessionLog).prompts).toBe(72)
+})
+
+test('a fresh session does not take the log of another that started a moment before', async (...env) => {
+  const now = Date.parse('2026-10-17T19:20:00')
+  const other = { ...OLD_LOG, startedAt: now - 20_000 }
+  const { store } = await startAt(env, { id: 'new', stored: { 'session:other': other } })
+  expect((store['session:new'] as SessionLog).prompts).toBe(0)
+})
+
+test('a resumed conversation is not pruned at its own start, however many sessions came after it', async (...env) => {
+  const stored: Record<string, unknown> = { 'session:mine': OLD_LOG }
+  for (let i = 0; i < 30; i++) stored[`session:s${i}`] = { ...OLD_LOG, startedAt: LAUNCH + 86_400_000 + i * 60_000 }
+  const { store } = await startAt(env, { id: 'mine', launch: LAUNCH, stored })
+  const keys = Object.keys(store)
+  expect(keys).toContain('session:mine')
+  expect(keys.filter(k => k.startsWith('session:')).length).toBe(30)
+})
+
+for (const surface of ['desktop', 'terminal'] as const)
+  test(`the chart and its fold wait for two points (${surface})`, async (...env) => {
+    const [$] = env
+    const { mount } = await startAt(env)
+    const ui = await mount(surface)
+    // One point (the context at start): nothing to chart, no fold.
+    expect(JSON.stringify(await ui.drawn())).not.toContain('block-dynamics')
+    await $.session.measure({ context: { tokens: 720_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+    expect(JSON.stringify(await ui.drawn())).toContain('block-dynamics')
+  })

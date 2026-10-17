@@ -44,7 +44,7 @@ const ru = {
   entryGone: 'Этого пункта сейчас нет в контексте.',
   whatIs: 'Что это',
   whySoMuch: 'Почему столько',
-  times: (n: number, avg: string) => `${n} раз, в среднем ${avg} за раз`,
+  times: (n: number, avg: string) => `${n} ${plural(n, 'раз', 'раза', 'раз')}, в среднем ${avg} за раз`,
   once: '1 раз',
   heaviest: 'Самые тяжёлые:',
   whatToDo: 'Что делать',

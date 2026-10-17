@@ -33,6 +33,6 @@ On the maintainer's machine the dev copy loads via `CLAUDE_CODE_PLUGIN_DIRS`; do
 
 ## Still open
 
-- Version 1.0.0 since 2026-10-16; README screenshots retaken in both languages the same day.
+- Version 1.1.0 since 2026-10-17 (desktop layout); README screenshots (terminal) retaken 2026-10-16.
 - Checked live: terminal and the desktop app (macOS, 2026-10-16). Untested: VS Code, mobile.
 - Mods API is early access; README says "built and tested on Claude Code 2.1.300".

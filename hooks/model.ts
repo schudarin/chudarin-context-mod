@@ -90,13 +90,20 @@ export function nameWidth(width: number, bar = 0): number {
 
 // Group name for a tool: built-in tools by name, MCP tools by server.
 export function kind(tool: string): string {
-  return tool.startsWith('mcp__') ? `MCP ${tool.split('__')[1]}` : tool
+  return tool.startsWith('mcp__') ? `MCP ${server(tool.split('__')[1] ?? '')}` : tool
+}
+
+// An MCP server's name for a label: a UUID in it shows as its first 8 characters, which tell
+// servers apart; the whole text (detail) keeps it in full.
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+export function server(name: string): string {
+  return name.replace(UUID, id => id.slice(0, 8))
 }
 
 // Short name for a tool call: tool plus its main argument.
 export function label(e: Record<string, unknown>): string {
   const tool = String(e.tool)
-  const short = tool.startsWith('mcp__') ? tool.split('__').slice(1).join(':') : tool
+  const short = tool.startsWith('mcp__') ? server(tool.split('__').slice(1).join(':')) : tool
   const arg =
     (typeof e.file_path === 'string' && e.file_path.split('/').pop()) ||
     (typeof e.skill === 'string' && e.skill) ||
@@ -121,6 +128,32 @@ export function chartRows(values: readonly number[], height: number): string[] {
       })
       .join('')
   })
+}
+
+// The empty part of a meter: a translucent grey reads on light and dark backgrounds alike.
+const TRACK = 'fill="#808080" fill-opacity="0.25"'
+const num = (x: number) => String(Math.round(x * 100) / 100)
+
+// The desktop's graphics. Its layout is not a cell grid, so the markup is wide and stretched
+// (preserveAspectRatio none) and the element is drawn with no width: it fills its slot, and the
+// caller sets the height in pixels. Square ends: rounded corners would stretch with the strip.
+const WIDE = 1000
+
+// A strip filled to `fraction` (0 to 1) in `color`; with `track`, the rest faint. A share above zero
+// shows at least a sliver. `opacity` below 1 lets a lit background show through the fill.
+export function lineSvg(fraction: number, color: string, opts: { track?: boolean; opacity?: number } = {}): string {
+  const h = 10
+  const f = Math.min(1, Math.max(0, fraction))
+  const filled = f > 0 ? Math.min(WIDE, Math.max(WIDE / 200, f * WIDE)) : 0
+  const alpha = opts.opacity !== undefined && opts.opacity < 1 ? ` fill-opacity="${opts.opacity}"` : ''
+  const bg = opts.track ? `<rect x="0" y="0" width="${WIDE}" height="${h}" ${TRACK}/>` : ''
+  const fg = filled > 0 ? `<rect x="0" y="0" width="${num(filled)}" height="${h}" fill="${color}"${alpha}/>` : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDE}" height="${h}" viewBox="0 0 ${WIDE} ${h}" preserveAspectRatio="none">${bg}${fg}</svg>`
+}
+
+// A title set in capitals for the terminal, as a sentence: "5-HOUR LIMIT" → "5-hour limit".
+export function sentenceCase(text: string): string {
+  return text === text.toUpperCase() ? text.charAt(0) + text.slice(1).toLowerCase() : text
 }
 
 const two = (n: number) => String(n).padStart(2, '0')
@@ -238,7 +271,7 @@ export function detailsFor(b: BreakdownLists): Record<string, Item[]> {
   const lists: [RegExp, () => Item[]][] = [
     [/skill/i, () => (b.skills?.skillFrontmatter ?? []).map(s => ({ name: s.name, tokens: s.tokens }))],
     [/memory/i, () => b.memoryFiles.map(f => ({ name: f.path.split('/').slice(-2).join('/'), tokens: f.tokens }))],
-    [/mcp tools/i, () => b.mcpTools.filter(t => t.isLoaded).map(t => ({ name: `${t.serverName}: ${t.name}`, tokens: t.tokens }))],
+    [/mcp tools/i, () => b.mcpTools.filter(t => t.isLoaded).map(t => ({ name: `${server(t.serverName)}: ${t.name}`, tokens: t.tokens }))],
     [/agent/i, () => b.agents.map(a => ({ name: a.agentType, tokens: a.tokens }))],
   ]
   const out: Record<string, Item[]> = {}

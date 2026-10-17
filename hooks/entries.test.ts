@@ -125,3 +125,15 @@ test('English labels and prices', () => {
     prompt: 'From now on, run tests and go through long logs in a subagent, and bring back only the summary.',
   })
 })
+
+test('an MCP action whose server id is a UUID is priced under its first 8 characters', () => {
+  const uuid = 'mcp__9427d561-bb31-414e-9bb9-bb8f652839bb__search'
+  const prices = actionPrices(
+    [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'm1', name: uuid, input: { query: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'm1', content: 'o'.repeat(400) }] },
+    ],
+    'en',
+  )
+  expect(prices.map(p => p.name)).toEqual(['MCP 9427d561'])
+})

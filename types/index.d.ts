@@ -10,6 +10,8 @@ export type LimitTrack = { resetsAt: string; samples: { at: number; percent: num
 // One session's running totals, kept in $.store under `session:<id>`.
 export type SessionLog = {
   startedAt: number
+  // The conversation's first launch (`usage.startedAt`), when the log was started knowing it.
+  launchedAt?: number
   requests: number
   // Everything the model read across requests: fresh, cached and newly cached input.
   read: number

@@ -65,3 +65,14 @@ test('the session block speaks in plain sentences', () => {
   expect(UI.ru.compactsLine(2, '300k')).toBe('Компактов: 2, сбросили 300k')
   expect(UI.en.compactsLine(2, '300k')).toBe('Compactions: 2, dropped 300k')
 })
+
+test('the count of times takes the Russian plural form', () => {
+  const ru = UI.ru.times
+  expect(ru(2, '3.7k')).toBe('2 раза, в среднем 3.7k за раз')
+  expect(ru(5, '1k')).toBe('5 раз, в среднем 1k за раз')
+  expect(ru(11, '1k')).toBe('11 раз, в среднем 1k за раз')
+  expect(ru(21, '1k')).toBe('21 раз, в среднем 1k за раз')
+  expect(ru(22, '1k')).toBe('22 раза, в среднем 1k за раз')
+  expect(ru(14, '1k')).toBe('14 раз, в среднем 1k за раз')
+  expect(UI.en.times(2, '3.7k')).toBe('2 times, 3.7k each on average')
+})

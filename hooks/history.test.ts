@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
+import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, findResumed, pruneKeys, sessionKey } from './history'
 
 const usage = (input: number, read: number, write: number, out: number) => ({
   input_tokens: input,
@@ -67,4 +67,25 @@ test('addLimit adds up what the session spent, across a reset', () => {
 test('addPoint keeps the full text of the cause', () => {
   const l = addPoint(emptyLog(0), 10_000, 'Bash npm test', 'Bash Run tests: npm test -- --watch=false')
   expect(l.points[0]!.detail).toBe('Bash Run tests: npm test -- --watch=false')
+})
+
+// A conversation resumed under a new session id (the desktop app after a restart) keeps its first
+// launch as `usage.startedAt`; its log is the one that started then.
+test('findResumed picks the log of the conversation a new id continues', () => {
+  const launch = Date.parse('2026-10-15T09:00:00')
+  const log = (startedAt: number, launchedAt?: number) => ({ ...emptyLog(startedAt, launchedAt) })
+  // A log that kept its launch time matches exactly, ahead of one that only started close to it.
+  expect(findResumed([['session:a', log(launch + 30_000, launch)], ['session:b', log(launch + 5_000)]], launch)).toBe('session:a')
+  // A log from before launch times were kept: the one that started within a minute of the launch.
+  expect(findResumed([['session:a', log(launch + 20_000)], ['session:c', log(launch - 3_600_000)]], launch)).toBe('session:a')
+  // Two that close: no telling which, so none.
+  expect(findResumed([['session:a', log(launch + 20_000)], ['session:b', log(launch + 40_000)]], launch)).toBeNull()
+  // Nothing close, or a log that kept another launch time.
+  expect(findResumed([['session:c', log(launch + 600_000)]], launch)).toBeNull()
+  expect(findResumed([['session:d', log(launch + 10_000, launch - 86_400_000)]], launch)).toBeNull()
+})
+
+test('emptyLog keeps the launch time when given', () => {
+  expect(emptyLog(5, 3).launchedAt).toBe(3)
+  expect(emptyLog(5).launchedAt).toBeUndefined()
 })

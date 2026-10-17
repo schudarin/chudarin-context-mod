@@ -1,12 +1,12 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, TextProps } from 'claude-code'
 
 import type { LimitTrack, Page, SessionLog, Snapshot, Step } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
-import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, pruneKeys, sessionKey } from './history'
-import { chartRows, clip, detail, detailsFor, fitCell, joinLines, nameWidth, priceGrid, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, findResumed, pruneKeys, sessionKey } from './history'
+import { chartRows, clip, detail, detailsFor, fitCell, joinLines, lineSvg, nameWidth, priceGrid, sentenceCase, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
@@ -67,6 +67,10 @@ const PANE = 'chudarin-context-mod'
 const STALE_MS = 5 * 60_000
 // Session logs kept in the store; older ones are dropped.
 const KEEP_SESSIONS = 30
+// A session whose conversation was launched longer ago than this is a resumed one.
+const RESUMED_MS = 60_000
+// Store key for the last 5-hour and weekly figures: limits are the account's, not a session's.
+const LAST_LIMITS = 'limits:last'
 const CHART_ROWS = 6
 // Content narrower than this stacks each row that holds a name and figures into two lines:
 // the name, then the figures under it, indented 2.
@@ -77,6 +81,33 @@ const EMPTY = '·'
 
 type Level = 'ok' | 'warn' | 'bad'
 const LEVEL_COLOR: Record<Level, 'success' | 'warning' | 'error'> = { ok: 'success', warn: 'warning', bad: 'error' }
+// The same levels, and the chart's 'suggestion', as fixed colors for vector graphics: an Svg is drawn
+// isolated and knows no theme. Each holds at least 3:1 on #ffffff, #f5f5f0, #eeeeee, #282828,
+// #1a1a19 and #000000.
+const LEVEL_HEX: Record<Level, string> = { ok: '#2b8a3e', warn: '#b87400', bad: '#d6333a' }
+const CHART_HEX = '#5769f7'
+
+// The desktop's layout (and every surface but the terminal's): the host's font, spacing in the
+// host's steps, columns as fixed-width Boxes in cells, graphics as Svg sized in pixels.
+// Columns, in cells: tokens or a delta, a share, a count, a turn, a chevron or mark, the chart's axis,
+// a group page's bar.
+const D_NUM = 6
+const D_PCT = 5
+const D_COUNT = 5
+const D_TURN = 8
+const D_MARK = 1
+const D_AXIS = 4
+const D_BAR = 10
+// Svg heights in pixels: a tile's meter, the stacked bar, a group page's bar.
+const PX_METER = 6
+const PX_STACK = 10
+const PX_BAR = 6
+// The chart's height in rows. Its columns are Boxes, not Svg: a hover restyles a Box, never what an
+// Svg draws, and a lit column must turn the accent color whole.
+const D_CHART_ROWS = 6
+// The chart spreads its turns over the first of these slot counts they fit in, so a few turns don't
+// draw fat columns, and a turn is a whole percent of the width (the engine takes whole percents only).
+const CHART_SLOTS = [20, 25, 50, 100] as const
 
 function levelOf(percent: number, warn: number, bad: number): Level {
   return percent > bad ? 'bad' : percent >= warn ? 'warn' : 'ok'
@@ -96,13 +127,14 @@ function widths(values: readonly number[], width: number): number[] {
   return out
 }
 
-// Load session `id`'s log, or start one. What was sent or hidden belonged to the session before.
-async function loadSession($: EngineInterface, id: string): Promise<SessionLog | undefined> {
+// Load session `id`'s log, or start one (`launch`: the conversation's first launch, when known).
+// What was sent or hidden belonged to the session before.
+async function loadSession($: EngineInterface, id: string, launch?: number): Promise<SessionLog | undefined> {
   // An unreadable store starts an empty log, as a missing one does.
   const stored = (await $.store.get(sessionKey(id)).catch(() => undefined)) as SessionLog | undefined
   const now = await $.clock.now()
   // Logs from older versions lack newer fields; the empty log fills them in.
-  await update($, log, () => (stored ? { ...emptyLog(stored.startedAt), ...stored } : emptyLog(now)))
+  await update($, log, () => (stored ? { ...emptyLog(stored.startedAt), ...stored } : emptyLog(now, launch)))
   await update($, hidden, () => [])
   await update($, sent, () => [])
   await update($, logId, () => id)
@@ -132,6 +164,12 @@ async function readLang($: EngineInterface): Promise<Lang> {
   return langOf(settings.language)
 }
 
+type LastLimit = { percentUsed: number; resetsAt?: string }
+function isLastLimits(v: unknown): v is Record<string, LastLimit> {
+  return !!v && typeof v === 'object' && !Array.isArray(v) &&
+    Object.values(v).every(x => !!x && typeof (x as LastLimit).percentUsed === 'number')
+}
+
 async function refresh($: EngineInterface) {
   const l = await readLang($)
   await update($, lang, () => l)
@@ -141,12 +179,29 @@ async function refresh($: EngineInterface) {
   const messages = await $.session.messages({ as: 'api' })
   const categories = windowRows(b.categories)
   const entries = buildEntries(categories, detailsFor(b), messages, l)
+  const fresh = usage.rateLimits.map(r => ({ kind: r.kind, percentUsed: r.percentUsed, resetsAt: r.resetsAt }))
+  // Limit figures come with model replies (the last API response's); right after a start, or in an
+  // idle refresh, there are none. Limits are the account's: the last figures any session read are
+  // kept in the store, and the session log is the fallback. A reset time that has passed shows as reset.
+  const stored = await $.store.get(LAST_LIMITS).catch(() => undefined)
+  const last: Record<string, LastLimit> = isLastLimits(stored) ? stored : {}
+  const logged = (await read($, log))?.limits ?? {}
+  const next0: Record<string, LastLimit> = { ...last }
+  const kept: { kind: string; percentUsed: number; resetsAt?: string }[] = []
+  for (const kind of ['five_hour', 'seven_day'] as const) {
+    const r = fresh.find(x => x.kind.includes(kind) && !/fable/i.test(x.kind))
+    if (r) next0[kind] = { percentUsed: r.percentUsed, ...(r.resetsAt ? { resetsAt: r.resetsAt } : {}) }
+    else if (last[kind]) kept.push({ kind, ...last[kind]! })
+    else if (logged[kind]) kept.push({ kind, percentUsed: logged[kind]!.last, resetsAt: logged[kind]!.resetsAt })
+  }
+  if (JSON.stringify(next0) !== JSON.stringify(last))
+    await $.store.set(LAST_LIMITS, next0).catch(err => $.ui.log(`chudarin-context-mod: limits not saved: ${String(err)}`))
   const next: Snapshot = {
     lang: l,
     at: await $.clock.now(),
     entries,
     prices: actionPrices(messages, l),
-    limits: usage.rateLimits.map(l => ({ kind: l.kind, percentUsed: l.percentUsed, resetsAt: l.resetsAt })),
+    limits: [...fresh, ...kept],
     threshold: b.isAutoCompactEnabled && b.autoCompactThreshold ? b.autoCompactThreshold : usage.context.window,
     window: usage.context.window,
     used: entries.reduce((n, e) => n + e.tokens, 0),
@@ -170,21 +225,37 @@ export const register: Register = on => {
     await $.command.register({ name: 'ctx', description: t0.cmdPanel })
     // Pick up this session's log (after a restart or `claude --resume`), or start one.
     const id = await $.session.id()
-    const stored = await loadSession($, id)
-    for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
-    // The usual pace, from the other sessions in the store.
-    const others: SessionLog[] = []
+    const { context, startedAt: launch } = await $.session.usage()
+    const now = await $.clock.now()
+    let stored = await loadSession($, id, launch)
+    // Every other session's log: the usual pace, and the one a resumed conversation may have left.
+    const others: (readonly [string, SessionLog])[] = []
     for (const key of await $.store.keys())
       if (key.startsWith('session:') && key !== sessionKey(id)) {
         const other = (await $.store.get(key)) as SessionLog | undefined
-        if (other) others.push(other)
+        if (other) others.push([key, other])
       }
-    await update($, usual, () => usualRise(others))
+    // A conversation launched well before this process (the desktop app after a restart) can come back
+    // under a new session id; its first launch is still `usage.startedAt`, so its log is found by that.
+    const resumed = !stored && now - launch > RESUMED_MS ? findResumed(others, launch) : null
+    const adopted = others.find(([key]) => key === resumed)?.[1]
+    if (adopted) {
+      stored = adopted
+      await update($, log, () => ({ ...emptyLog(adopted.startedAt), ...adopted, launchedAt: launch }))
+    }
+    // The store keeps its keys in insertion order and pruning drops the oldest: this session's log goes
+    // to the end now, so a long conversation resumed after many short ones is not the one dropped.
+    if (stored) {
+      const current = await read($, log)
+      await $.store.delete(sessionKey(id)).catch(() => undefined)
+      if (current) await $.store.set(sessionKey(id), current)
+    }
+    for (const key of pruneKeys(await $.store.keys(), KEEP_SESSIONS)) await $.store.delete(key)
+    await update($, usual, () => usualRise(others.map(([, l]) => l)))
     // Only a list of ids counts; anything else in the store is ignored.
     const rawMuted = await $.store.get(MUTED)
     const mutedBefore = Array.isArray(rawMuted) ? rawMuted.filter((x): x is string => typeof x === 'string') : []
     await update($, muted, () => mutedBefore)
-    const { context } = await $.session.usage()
     if (context.tokens !== undefined && !stored?.points.length) {
       const tokens = context.tokens
       await saveLog($, l => addPoint(l, tokens, null))
@@ -272,14 +343,54 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     try {
-      const { Box, Button, Text: SurfaceText } = $.ui.resolve(e)
-      // Every Text in the surface's monospaced face: the desktop draws a proportional one, and the
-      // pane's columns, meters, bars and chart are counted in cells. The terminal ignores `mono`.
-      // A nested Text isn't said to take it from its parent (only size and weight are), so each asks.
-      const Text: typeof SurfaceText = props => SurfaceText({ mono: true, ...props })
-      // A Button draws a bare string in the surface's own face, so a name in a list goes in a Text.
-      // The terminal is monospaced already: its tree stays as it was.
-      const named = (name: string) => (e.surface === 'terminal' ? name : <Text>{name}</Text>)
+      const elements = $.ui.resolve(e)
+      const { Box, Button, Text: HostText } = elements
+      // The terminal's tree keeps `mono` on every Text, as it was drawn before the desktop got its
+      // own layout; the terminal ignores it.
+      const Text: typeof HostText = props => HostText({ mono: true, ...props })
+      // Everywhere but the terminal: the desktop layout, in the host's own font.
+      const gui = e.surface !== 'terminal'
+      // Meters, bars and the chart as vector graphics where the surface draws Svg. An Svg is a leaf
+      // that takes no hover and can't sit in a Button: a Box around it carries the hover group.
+      const Svg = gui && 'Svg' in elements ? elements.Svg : null
+      // A figure in a table column: a fixed width in cells, right-aligned, digits of one width.
+      const figure = (text: string, width: number, style: TextProps = {}) => (
+        <Box width={width} flexShrink={0} justifyContent="flex-end">
+          <HostText tabular {...style}>
+            {text}
+          </HostText>
+        </Box>
+      )
+      // A fixed-width cell for a chevron, a mark or a dot, so the rows' edges line up; dim unless
+      // given a color.
+      const markCell = (mark: string | null, style: TextProps = {}) => (
+        <Box width={D_MARK} flexShrink={0}>
+          {mark !== null && <HostText {...(style.color ? style : { dimColor: true, ...style })}>{mark}</HostText>}
+        </Box>
+      )
+      // A page title or a section title, with a figure at the far end that moves under it when the
+      // pane is too narrow for both.
+      const heading = (title: string, note: string | null, size: 'heading' | 'body' = 'body') => (
+        <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="flex-end" columnGap="md">
+          <HostText size={size} weight="semibold">
+            {title}
+          </HostText>
+          {note !== null && (
+            <HostText size="caption" dimColor>
+              {note}
+            </HostText>
+          )}
+        </Box>
+      )
+      // The back link, a line of its own at the top of a page: a link, dim at rest and full under the
+      // pointer or the focus (the Button's own `dimColor`). `ring` is the key that takes the focus on
+      // the page it leads to, the row the person came from.
+      const backLink = (to: Page, ring: string) => <Button key="back" plain dimColor label={t.back} onPress={go(to, ring)} />
+      // Actions are the host's own buttons, with chrome: `plain` would draw them as bare text. "Put in
+      // chat" is the screen's one primary action; the rest are secondary.
+      const action = (key: string, text: string, onPress: () => unknown, variant: 'primary' | 'secondary' = 'secondary') => (
+        <Button key={key} variant={variant} label={text} onPress={() => void onPress()} />
+      )
       // Every read at once: one wait per redraw instead of one per read (a resize redraws
       // on each step). Reading `minute` subscribes the pane to the minute clock.
       const [snap, language, session, open, where, , now, mutedIds, done, hiddenIds, track, usualPace] = await Promise.all([
@@ -297,7 +408,14 @@ export const register: Register = on => {
         read($, usual),
       ])
       const t = UI[language]
-      if (!snap) return <Text dimColor>{t.noData}</Text>
+      if (!snap)
+        return gui ? (
+          <Box padding="md">
+            <HostText dimColor>{t.noData}</HostText>
+          </Box>
+        ) : (
+          <Text dimColor>{t.noData}</Text>
+        )
 
       const points = session?.points ?? []
       const fiveSpent = session?.limits?.five_hour?.spent ?? null
@@ -320,7 +438,18 @@ export const register: Register = on => {
           <Text> </Text>
         </Box>
       )
-      const go = (to: Page) => () => update($, page, () => to)
+      // A press that changes the page removes the Button that held the focus. On the desktop the ring
+      // goes to the new page's first stop (`ring`, else its back link), so the pane keeps the keyboard
+      // and the next click presses at once. The terminal's ring stays the engine's, as before.
+      // Not awaited: the ring waits for the next drawing. What came of it goes to the debug log only.
+      const go = (to: Page, ring = 'back') => async () => {
+        await update($, page, () => to)
+        if (gui)
+          void $.ui.focus({ requestId: PANE, key: ring }).then(
+            r => $.ui.log(`chudarin-context-mod: focus to ${ring}: ${r.deny ?? 'moved'}`, { to: 'debug' }),
+            err => $.ui.log(`chudarin-context-mod: focus to ${ring}: ${String(err)}`, { to: 'debug' }),
+          )
+      }
       const pctOfUsed = (n: number) => (snap.used ? `${Math.round((n / snap.used) * 100)}%` : '')
       const ofUsed = (n: number) => t.ofUsed(k(n), pctOfUsed(n))
       const total = points[points.length - 1]?.tokens ?? snap.used
@@ -387,6 +516,13 @@ export const register: Register = on => {
         const entry = snap.entries.find(x => x.id === where.id)
         const help = helpFor(where.id, snap.lang)
         const parent: Page = { kind: 'group', id: entry?.group ?? help.group }
+        if (gui && !entry)
+          return (
+            <Box flexDirection="column" padding="md" gap="lg">
+              {backLink(parent, 'back')}
+              <HostText dimColor>{t.entryGone}</HostText>
+            </Box>
+          )
         if (!entry)
           return (
             <Box flexDirection="column" paddingX={PAD}>
@@ -396,6 +532,61 @@ export const register: Register = on => {
           )
         const average = entry.count ? Math.round(entry.tokens / entry.count) : 0
         const state = stateOf(entry.id)
+        if (gui) {
+          // A section of the page: its title, then what it says, rows `xs` apart.
+          const part = (title: string, body: ReturnType<typeof HostText>[]) => (
+            <Box flexDirection="column" gap="sm">
+              <HostText weight="semibold">{title}</HostText>
+              <Box flexDirection="column" gap="xs">
+                {body}
+              </Box>
+            </Box>
+          )
+          return (
+            <Box flexDirection="column" padding="md" gap="lg">
+              {backLink(parent, `entry-${entry.id}`)}
+              {heading(entry.label, ofUsed(entry.tokens), 'heading')}
+              {part(t.whatIs, [<HostText>{help.what}</HostText>])}
+              {part(t.whySoMuch, [
+                <HostText>{entry.count > 1 ? t.times(entry.count, k(average)) : t.once}</HostText>,
+                ...(entry.top.length > 0
+                  ? [
+                      <HostText size="caption" dimColor>
+                        {t.heaviest}
+                      </HostText>,
+                    ]
+                  : []),
+                ...entry.top.map(c => (
+                  <Box flexDirection="row" alignItems="flex-start" columnGap="sm">
+                    {figure(`+${k(c.tokens)}`, D_NUM)}
+                    <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                      <HostText>{c.label}</HostText>
+                    </Box>
+                  </Box>
+                )),
+              ])}
+              {/* advice hidden for good leaves no trace here either */}
+              {state !== 'muted' &&
+                part(t.whatToDo, [
+                  // hidden this session: the mark below stands in for the advice
+                  ...(state !== 'hidden' ? [<HostText>{help.todo ?? t.nothingToDo}</HostText>] : []),
+                  // one row of actions; what it holds depends on the advice's state
+                  ...(help.todo
+                    ? [
+                        <Box flexDirection="row" flexWrap="wrap" alignItems="flex-end" columnGap="md" rowGap="xs">
+                          {state === 'sent' && <HostText dimColor>{help.prompt?.startsWith('/') ? t.hintRan : t.hintSent}</HostText>}
+                          {state === 'hidden' && <HostText dimColor>{t.adviceHidden}</HostText>}
+                          {state === 'shown' && help.prompt && action('entry-fill', t.hintFill, putInChat({ id: entry.id, prompt: help.prompt }), 'primary')}
+                          {state === 'shown'
+                            ? action('entry-hide', t.hideAdvice, hide(entry.id))
+                            : action('entry-mute', t.neverShow, () => setMuted(prev => [...prev, entry.id]))}
+                        </Box>,
+                      ]
+                    : []),
+                ])}
+            </Box>
+          )
+        }
         return (
           <Box flexDirection="column" paddingX={PAD}>
             {back(parent)}
@@ -461,6 +652,38 @@ export const register: Register = on => {
         const list = snap.entries.filter(x => x.group === group.id)
         const sum = list.reduce((n, x) => n + x.tokens, 0)
         const max = Math.max(0, ...list.map(x => x.tokens))
+        // The name column in cells: the row less tokens, share, the bar where it shows, the chevron and
+        // a cell for each gap.
+        const groupName = Math.max(8, W - D_NUM - D_PCT - D_MARK - 4 - (compact ? 0 : D_BAR + 1))
+        if (gui)
+          return (
+            <Box flexDirection="column" padding="md" gap="lg">
+              {backLink({ kind: 'home' }, `group-${group.id}`)}
+              {heading(groupLabel(group.id, snap.lang), ofUsed(sum), 'heading')}
+              {list.length === 0 && <HostText dimColor>{t.emptyGroup}</HostText>}
+              {/* name | tokens | share | bar | chevron; a narrow pane leaves the bar out, the figures say it */}
+              <Box flexDirection="column" gap="xs">
+                {list.map(x => (
+                  <Box key={`row-${x.id}`} flexDirection="row" alignItems="flex-start" columnGap="sm">
+                    {/* the name may shrink below its text and is cut to its column, so the figures stay put */}
+                    <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                      <Button key={`entry-${x.id}`} plain label={x.label} onPress={go({ kind: 'entry', id: x.id })}>
+                        <HostText wrap="truncate-end">{clip(x.label, groupName)}</HostText>
+                      </Button>
+                    </Box>
+                    {figure(k(x.tokens), D_NUM)}
+                    {figure(pctOfUsed(x.tokens), D_PCT, { dimColor: true })}
+                    {!compact && Svg && (
+                      <Box width={D_BAR} flexShrink={0} alignSelf="center">
+                        <Svg source={lineSvg(max > 0 ? x.tokens / max : 0, group.color)} alt={`${x.label} ${k(x.tokens)}`} height={PX_BAR} />
+                      </Box>
+                    )}
+                    {markCell('›')}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          )
         // Group rows also hold a bar: the name leaves it four cells, and in a pane too narrow even
         // for that the bar goes.
         const NAME_G = nameWidth(W, 4)
@@ -484,7 +707,7 @@ export const register: Register = on => {
                   <Box key={`row-${x.id}`} flexDirection="column">
                     <Box flexDirection="row">
                       <Button key={`entry-${x.id}`} plain label={x.label} onPress={open}>
-                        {named(clip(x.label, W - 2))}
+                        {clip(x.label, W - 2)}
                       </Button>
                       <Text dimColor> ▸</Text>
                     </Box>
@@ -500,7 +723,7 @@ export const register: Register = on => {
               return (
                 <Box key={`row-${x.id}`} flexDirection="row">
                   <Button key={`entry-${x.id}`} plain label={x.label} onPress={open}>
-                    {named(name)}
+                    {name}
                   </Button>
                   <Text>
                     {' '.repeat(NAME_G - name.length)}
@@ -590,6 +813,8 @@ export const register: Register = on => {
       // One column per turn: what that turn added, so a heavy turn stands out as a peak.
       const shown = points.slice(-Math.max(10, W - 8) - 1)
       const rises = turnRises(shown)
+      // One point is the context at start: nothing to chart until a second one (or a compaction).
+      const chartable = points.length >= 2 || (session?.compacts.length ?? 0) > 0
       const chartMax = Math.max(0, ...rises)
       // The five biggest jumps, listed below the chart; each one's column joins its hover group.
       const peaks = jumps(shown, 5)
@@ -619,6 +844,292 @@ export const register: Register = on => {
         }
         flush()
         return parts
+      }
+
+      if (gui) {
+        const stale = now - (snap.at ?? now) >= STALE_MS
+        // The chart's slots: one a turn, so a few turns draw slim columns at the left and the empty
+        // slots are the turns to come. Past 100 turns a slot's width is rounded where it ends.
+        const slots = CHART_SLOTS.find(n => n >= rises.length) ?? rises.length
+        const slotWidth = (from: number) => `${Math.round(((from + 1) / slots) * 100) - Math.round((from / slots) * 100)}%`
+        // A column's height: its share of the biggest rise, a whole percent, at least 1 when above zero.
+        const columnHeight = (rise: number) =>
+          chartMax > 0 && rise > 0 ? Math.max(1, Math.round((Math.min(rise, chartMax) / chartMax) * 100)) : 0
+        // The stacked bar's pieces in whole percents that add up to 100.
+        const piece = widths(
+          usedGroups.map(g => g.tokens),
+          100,
+        )
+        // A jump's caption column, in cells: the row less the delta, the turn, the mark and the gaps.
+        const captionCells = Math.max(8, W - D_NUM - D_TURN - D_MARK - 3)
+        return (
+          <Box flexDirection="column" padding="md" gap="xl">
+            {/* three cards side by side; a narrow pane stacks them */}
+            <Box flexDirection="column" gap="sm">
+              <Box flexDirection={compact ? 'column' : 'row'} gap="md">
+                {tiles.map(tile => (
+                  <Box
+                    flexDirection="column"
+                    flexGrow={1}
+                    flexShrink={1}
+                    {...(compact ? {} : { width: `${Math.floor(100 / tiles.length)}%` })}
+                    borderStyle="round"
+                    borderDimColor
+                    padding="md"
+                    gap="xs"
+                  >
+                    <HostText size="caption" dimColor>
+                      {sentenceCase(tile.title)}
+                    </HostText>
+                    {/* the level's color only once it asks for attention; the meter always carries it */}
+                    <HostText size="title" weight="semibold" tabular {...(tile.level === 'ok' ? {} : { color: LEVEL_COLOR[tile.level] })}>
+                      {`${Math.round(tile.percent)}%`}
+                    </HostText>
+                    {Svg && (
+                      <Svg
+                        source={lineSvg(tile.percent / 100, LEVEL_HEX[tile.level], { track: true })}
+                        alt={`${sentenceCase(tile.title)} ${Math.round(tile.percent)}%`}
+                        height={PX_METER}
+                      />
+                    )}
+                    {tile.lines.filter(Boolean).map(l => (
+                      <HostText size="caption" dimColor>
+                        {l}
+                      </HostText>
+                    ))}
+                  </Box>
+                ))}
+              </Box>
+              {tempo && <HostText>{t.speed(tempo.kind, tempo.ratio)}</HostText>}
+            </Box>
+
+            {/* what fills the window: the title over the tokens column with the total */}
+            <Box flexDirection="column" gap="sm">
+              <Box flexDirection="row" alignItems="flex-end" columnGap="sm">
+                <Box flexGrow={1} flexShrink={1}>
+                  <HostText weight="semibold">{t.whatFills}</HostText>
+                </Box>
+                {figure(k(snap.used), D_NUM, { dimColor: true })}
+                <Box width={D_PCT} flexShrink={0} />
+                {markCell(null)}
+              </Box>
+              {/* A bar piece and its legend row share a hover group: pointing at either lights both.
+                  The piece is drawn translucent over a Box that takes the group's color when lit. */}
+              {Svg && (
+                <Box flexDirection="row" columnGap="xs">
+                  {usedGroups.map((g, i) => (
+                    <Box
+                      width={`${piece[i] ?? 0}%`}
+                      flexShrink={1}
+                      hover={{ scope: `group-${g.id}`, backgroundColor: g.color }}
+                    >
+                      <Svg source={lineSvg(1, g.color, { opacity: 0.7 })} alt={`${g.label} ${k(g.tokens)}`} height={PX_STACK} />
+                    </Box>
+                  ))}
+                </Box>
+              )}
+              {/* dot | name | tokens | share | chevron */}
+              <Box flexDirection="column" gap="xs">
+                {usedGroups.map(g => {
+                  const lit = { scope: `group-${g.id}`, bold: true } as const
+                  return (
+                    <Box key={`row-${g.id}`} flexDirection="row" alignItems="flex-start" columnGap="sm">
+                      {markCell('●', { color: g.color, hover: lit })}
+                      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                        <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
+                          <HostText wrap="truncate-end">{clip(g.label, Math.max(8, W - D_MARK - D_NUM - D_PCT - D_MARK - 4))}</HostText>
+                        </Button>
+                      </Box>
+                      {figure(k(g.tokens), D_NUM, { hover: lit })}
+                      {figure(pctOfUsed(g.tokens), D_PCT, { dimColor: true, hover: lit })}
+                      {markCell('›', { hover: lit })}
+                    </Box>
+                  )
+                })}
+              </Box>
+              {/* the arrow on the hint's first line; the buttons under the text */}
+              {hint && (
+                <Box flexDirection="row" alignItems="flex-start" columnGap="sm" marginTop="sm">
+                  {/* the arrow in the text color: the primary button is the screen's one accent */}
+                  <HostText weight="semibold">→</HostText>
+                  <Box flexDirection="column" flexShrink={1} gap="sm">
+                    <HostText>{hint.text}</HostText>
+                    <Box flexDirection="row" flexWrap="wrap" columnGap="md" rowGap="xs">
+                      {hint.prompt && action('hint-fill', t.hintFill, putInChat(hint), 'primary')}
+                      {/* the entry page's label: one name for one action on this surface */}
+                      {action('hint-hide', t.hideAdvice, hide(hint.id))}
+                    </Box>
+                  </Box>
+                </Box>
+              )}
+            </Box>
+
+            {/* what one action costs: name | average | how many times */}
+            <Box flexDirection="column" gap="sm">
+              <HostText weight="semibold">{t.prices}</HostText>
+              {prices.length === 0 && <HostText dimColor>{t.noActions}</HostText>}
+              {prices.length > 0 && (
+                <Box flexDirection="column" gap="xs">
+                  {prices.map(p => (
+                    <Box flexDirection="row" alignItems="flex-start" columnGap="sm">
+                      <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                        <HostText>{p.name}</HostText>
+                      </Box>
+                      {figure(k(p.average), D_NUM)}
+                      {figure(`×${p.count}`, D_COUNT, { dimColor: true })}
+                      {/* an empty chevron cell: the figures end where the context table's do */}
+                      {markCell(null)}
+                    </Box>
+                  ))}
+                </Box>
+              )}
+            </Box>
+
+            {/* the whole session, compactions included */}
+            {session && session.requests > 0 && (
+              <Box flexDirection="column" gap="sm">
+                <Box flexDirection="row" flexWrap="wrap" alignItems="flex-end" columnGap="sm">
+                  <HostText weight="semibold">{t.session}</HostText>
+                  <HostText size="caption" dimColor>
+                    {t.since(resetLabel(new Date(session.startedAt).toISOString(), now))}
+                  </HostText>
+                </Box>
+                <Box flexDirection="column" gap="xs">
+                  <HostText>{t.sessionRuns(Math.max(0, Math.round((now - session.startedAt) / 60_000)), session.prompts ?? 0)}</HostText>
+                  {fiveSpent !== null && <HostText>{t.sessionSpent(fiveSpent, weekSpent)}</HostText>}
+                  {fiveSpent !== null && fiveSpent > 0 && (session.prompts ?? 0) > 0 && (
+                    <HostText>{t.perMessage(fiveSpent / (session.prompts ?? 1))}</HostText>
+                  )}
+                  <HostText>
+                    {t.compactsLine(session.compacts.length, k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
+                  </HostText>
+                </Box>
+              </Box>
+            )}
+
+            {/* folded: the chart, its jumps and the compactions; once there is something to chart */}
+            {chartable && (
+            <Box flexDirection="column" gap="sm">
+              <Button key="block-dynamics" plain label={t.growth} onPress={toggle('block:dynamics')}>
+                <HostText weight="semibold">{`${isOpen('block:dynamics') ? '▾' : '▸'} ${t.growth}`}</HostText>
+              </Button>
+              {isOpen('block:dynamics') && (
+                <Box flexDirection="column" gap="sm">
+                  {/* the axis (the biggest rise on top, 0 at the bottom), then the plot */}
+                  <Box flexDirection="row" alignItems="stretch" columnGap="sm">
+                    <Box width={D_AXIS} flexShrink={0} flexDirection="column" justifyContent="space-between" alignItems="flex-end">
+                      <HostText size="caption" dimColor tabular>
+                        {k(chartMax)}
+                      </HostText>
+                      <HostText size="caption" dimColor tabular>
+                        0
+                      </HostText>
+                    </Box>
+                    {/* one slot a turn; a column is a colored Box, and a peak's column joins its hover
+                        group, so the jump list and the chart light each other */}
+                    <Box flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} height={D_CHART_ROWS}>
+                      {rises.map((rise, c) => {
+                        const peak = peakAt.get(c)
+                        // not `h`: that name is the JSX factory
+                        const tall = columnHeight(rise)
+                        return (
+                          <Box width={slotWidth(c)} flexShrink={0} flexDirection="column" justifyContent="flex-end" alignItems="center">
+                            {tall > 0 && (
+                              <Box
+                                width="60%"
+                                height={`${tall}%`}
+                                backgroundColor={CHART_HEX}
+                                {...(peak !== undefined ? { hover: { scope: `peak-${peak}`, backgroundColor: 'claude' } } : {})}
+                              />
+                            )}
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  </Box>
+                  {shown.length > 2 && (
+                    <Box flexDirection="row" columnGap="sm">
+                      <Box width={D_AXIS} flexShrink={0} />
+                      <HostText size="caption" dimColor>
+                        {t.turnRange(shown[1]!.turn, shown[shown.length - 1]!.turn)}
+                      </HostText>
+                    </Box>
+                  )}
+                  {/* delta | turn | caption | mark. A jump with more to read opens on a press. */}
+                  <Box flexDirection="column" gap="xs" marginTop="sm">
+                    {peaks.map((j, n) => {
+                      const caption = j.cause ?? t.conversation
+                      const full = j.detail ?? caption
+                      const opens = full !== caption || caption.length > captionCells
+                      const line = clip(caption, captionCells)
+                      const hover = { scope: `peak-${n + 1}`, color: 'claude' } as const
+                      const isOpenJump = isOpen(`jump:${j.turn}`)
+                      // Opened: what the line doesn't already say. The label caption in full is not repeated.
+                      const rest = line === caption && full.startsWith(caption) ? full.slice(caption.length).replace(/^[:\s]+/, '') : full
+                      return (
+                        <Box flexDirection="column" gap="xs">
+                          <Box flexDirection="row" alignItems="flex-start" columnGap="sm">
+                            {figure(`+${k(j.delta)}`, D_NUM, { hover })}
+                            <Box width={D_TURN} flexShrink={0}>
+                              <HostText dimColor hover={hover}>
+                                {t.turn(j.turn)}
+                              </HostText>
+                            </Box>
+                            <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                              {opens ? (
+                                <Button key={`jump-${j.turn}`} plain label={caption} hover={hover} onPress={toggle(`jump:${j.turn}`)}>
+                                  <HostText>{line}</HostText>
+                                </Button>
+                              ) : (
+                                <HostText hover={hover}>{line}</HostText>
+                              )}
+                            </Box>
+                            {markCell(opens ? (isOpenJump ? '▾' : '▸') : null, { hover })}
+                          </Box>
+                          {isOpenJump && (
+                            <Box flexDirection="row" columnGap="sm">
+                              <Box width={D_NUM} flexShrink={0} />
+                              <Box width={D_TURN} flexShrink={0} />
+                              <Box flexGrow={1} flexShrink={1}>
+                                <HostText size="caption" dimColor>
+                                  {rest || full}
+                                </HostText>
+                              </Box>
+                            </Box>
+                          )}
+                        </Box>
+                      )
+                    })}
+                    {(session?.compacts ?? []).map(c => (
+                      <Box flexDirection="row" alignItems="flex-start" columnGap="sm">
+                        {figure(`−${k(Math.max(0, c.before - c.after))}`, D_NUM)}
+                        <Box width={D_TURN} flexShrink={0}>
+                          <HostText dimColor>{t.turn(c.turn)}</HostText>
+                        </Box>
+                        <Box flexGrow={1} flexShrink={1}>
+                          <HostText>
+                            {t.compactLine(c.trigger === 'manual' ? t.manual : c.trigger === 'auto' ? t.auto : t.plugin, k(c.before), k(c.after))}
+                          </HostText>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+            </Box>
+            )}
+
+            {/* only once the figures are five minutes old; limits move only when a reply comes in */}
+            {stale && (
+              <Box flexDirection="row" flexWrap="wrap" alignItems="flex-end" columnGap="sm">
+                <HostText size="caption" dimColor>
+                  {t.stale(resetLabel(new Date(snap.at).toISOString(), now))}
+                </HostText>
+                {action('refresh', t.refresh, () => refresh($))}
+              </Box>
+            )}
+          </Box>
+        )
       }
 
       return (
@@ -713,7 +1224,7 @@ export const register: Register = on => {
                       ■{' '}
                     </Text>
                     <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
-                      {named(clip(g.label, W - 4))}
+                      {clip(g.label, W - 4)}
                     </Button>
                     <Text dimColor hover={lit}>
                       {' ▸'}
@@ -729,7 +1240,7 @@ export const register: Register = on => {
                   ■{' '}
                 </Text>
                 <Button key={`group-${g.id}`} plain label={g.label} hover={lit} onPress={go({ kind: 'group', id: g.id })}>
-                  {named(name)}
+                  {name}
                 </Button>
                 <Text hover={lit}>
                   {' '.repeat(NAME - 2 - name.length)}
@@ -805,19 +1316,17 @@ export const register: Register = on => {
             </Box>
           )}
 
-          {/* folded details */}
+          {/* folded details, once there is something to chart */}
+          {chartable && [
           <Button key="block-dynamics" plain label={t.growth} onPress={toggle('block:dynamics')}>
             <Text>
               <Text dimColor>{isOpen('block:dynamics') ? '▾ ' : '▸ '}</Text>
               {t.growth}
             </Text>
-          </Button>
-          {isOpen('block:dynamics') && (
+          </Button>,
+          isOpen('block:dynamics') && (
             <Box flexDirection="column" paddingLeft={2}>
-              {chartRows(
-                rises,
-                CHART_ROWS,
-              ).map((line, i) => (
+              {chartRows(rises, CHART_ROWS).map((line, i) => (
                 // A row of sibling Texts, not one Text: a nested Text can't light its hover group,
                 // and a peak's cells must light the list line too.
                 <Box flexDirection="row">
@@ -899,7 +1408,8 @@ export const register: Register = on => {
                 </Text>
               ))}
             </Box>
-          )}
+          ),
+          ]}
 
           {/* only once the figures are five minutes old; limits move only when a reply comes in */}
           {now - (snap.at ?? now) >= STALE_MS && <Text> </Text>}

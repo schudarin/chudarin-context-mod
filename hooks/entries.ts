@@ -186,7 +186,7 @@ const ACTION_TEXT: Record<string, keyof Strings> = {
 
 function actionName(action: string, lang: Lang): string | null {
   if (action === 'Skill' || action === 'AskUserQuestion' || action === 'ToolSearch') return null
-  if (action.startsWith('mcp__')) return `MCP ${action.split('__')[1]}`
+  if (action.startsWith('mcp__')) return kind(action)
   const text = ACTION_TEXT[action]
   return text ? (UI[lang][text] as string) : action
 }
