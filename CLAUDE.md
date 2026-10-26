@@ -33,6 +33,7 @@ On the maintainer's machine the dev copy loads via `CLAUDE_CODE_PLUGIN_DIRS`; do
 
 ## Still open
 
-- Version 1.1.0 since 2026-10-17 (desktop layout); README screenshots (terminal) retaken 2026-10-16.
-- Checked live: terminal and the desktop app (macOS, 2026-10-16). Untested: VS Code, mobile.
+- Version 1.2.0 since 2026-10-26 (subagents in "За сессию"); README screenshots (terminal) retaken 2026-10-16, before the subagent lines.
+- Checked live: terminal and the desktop app (macOS, 2026-10-16); subagent lines in the terminal only (2026-10-26). Untested: VS Code, mobile.
+- Subagents: workflow agents (`subagents/workflows/`) aren't counted; a running agent's file is read again whole after each turn.
 - Mods API is early access; README says "built and tested on Claude Code 2.1.300".

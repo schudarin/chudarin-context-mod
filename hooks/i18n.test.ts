@@ -64,6 +64,14 @@ test('the session block speaks in plain sentences', () => {
   expect(UI.ru.compactsLine(0, '')).toBe('Компактов не было')
   expect(UI.ru.compactsLine(2, '300k')).toBe('Компактов: 2, сбросили 300k')
   expect(UI.en.compactsLine(2, '300k')).toBe('Compactions: 2, dropped 300k')
+  expect(UI.ru.agents(14, '2.4M')).toBe('Субагентов: 14, обработали 2.4M')
+  expect(UI.en.agents(1, '15k')).toBe('Subagents: 1, processed 15k')
+  expect(UI.ru.agentsSplit('310k', '2.1M')).toBe('Новых 310k, из кеша 2.1M')
+  expect(UI.en.agentsSplit('310k', '2.1M')).toBe('New 310k, from cache 2.1M')
+  expect(UI.ru.agentPeak('180k', 1)).toBe('пик 180k · 1 шаг')
+  expect(UI.ru.agentPeak('180k', 42)).toBe('пик 180k · 42 шага')
+  expect(UI.ru.agentPeak('180k', 25)).toBe('пик 180k · 25 шагов')
+  expect(UI.en.agentPeak('180k', 1)).toBe('peak 180k · 1 step')
 })
 
 test('the count of times takes the Russian plural form', () => {

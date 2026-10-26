@@ -28,6 +28,13 @@ export type SessionLog = {
 // One plan limit as the session saw it: the last percent and how much it has added up.
 export type LimitSpend = { resetsAt: string; last: number; spent: number }
 
+// One subagent, read from its transcript: its task, its model requests (steps), the biggest
+// context one step read, what was new (input, cache write, output) and what came from cache.
+export type AgentRun = { description: string; steps: number; peak: number; fresh: number; cached: number }
+
+// The session's subagents: how many ran, what they processed, the three dearest.
+export type Subagents = { count: number; fresh: number; cached: number; top: AgentRun[] }
+
 export type GroupId = 'tools' | 'service' | 'chat' | 'rules'
 
 // Everything the pane reads, refreshed after each turn.
@@ -49,6 +56,8 @@ export type Snapshot = {
   threshold: number
   window: number
   used: number
+  // Null until the session's transcript is known, or when no subagent has run.
+  subagents: Subagents | null
 }
 
 export type Page = { kind: 'home' } | { kind: 'group'; id: string } | { kind: 'entry'; id: string }
@@ -76,6 +85,8 @@ declare module 'claude-code' {
       minute: number
       // The session id that log, sent and hidden belong to; /clear and a resume change it.
       logId: string | null
+      // The session's transcript path, from the last prompt; its subagents' transcripts lie beside it.
+      transcript: string | null
     }
   }
 }

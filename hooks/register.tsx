@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, TextProps } from 'claude-code'
 
-import type { LimitTrack, Page, SessionLog, Snapshot, Step } from '../types'
+import type { AgentRun, LimitTrack, Page, SessionLog, Snapshot, Step, Subagents } from '../types'
 import { GROUPS, actionPrices, buildEntries, groupLabel, groupTotals, insight } from './entries'
 import { HELP_IDS, helpFor } from './help'
 import { type Lang, langOf, UI } from './i18n'
 import { addCompact, addLimit, addPoint, addPrompt, addRequest, emptyLog, findResumed, pruneKeys, sessionKey } from './history'
 import { chartRows, clip, detail, detailsFor, fitCell, joinLines, lineSvg, nameWidth, priceGrid, sentenceCase, wrapLines, jumps, k, label, limitForecast, pace, resetLabel, speed, trackLimit, turnRises, usualRise, windowRows } from './model'
+import { addLine, descriptionOf, runOf, summarize } from './subagents'
 
 const log = atom({ plugin: 'chudarin-context-mod', key: 'log' } as const, null)
 const heaviest = atom({ plugin: 'chudarin-context-mod', key: 'heaviest' } as const, null)
@@ -21,6 +22,7 @@ const muted = atom({ plugin: 'chudarin-context-mod', key: 'muted' } as const, []
 const limitTrack = atom({ plugin: 'chudarin-context-mod', key: 'limitTrack' } as const, null)
 const minute = atom({ plugin: 'chudarin-context-mod', key: 'minute' } as const, 0)
 const logId = atom({ plugin: 'chudarin-context-mod', key: 'logId' } as const, null)
+const transcript = atom({ plugin: 'chudarin-context-mod', key: 'transcript' } as const, null)
 // Store key for the 5-hour limit samples: the limit is shared by every session.
 const LIMIT = 'limit:five_hour'
 
@@ -170,6 +172,51 @@ function isLastLimits(v: unknown): v is Record<string, LastLimit> {
     Object.values(v).every(x => !!x && typeof (x as LastLimit).percentUsed === 'number')
 }
 
+// Each subagent transcript read, by path, with the mtime and size it had: a file is read again only
+// once it changes, so a finished agent is read once.
+const agentRuns = new Map<string, { stamp: string; run: AgentRun }>()
+
+// One subagent's transcript can run to tens of MB, past what $.fs.read takes: grep streams only the
+// reply lines, and they are summed line by line as they come.
+async function readRun($: EngineInterface, dir: string, id: string): Promise<AgentRun> {
+  const meta = await $.fs.read(`${dir}/${id}.meta.json`).then(t => JSON.parse(t) as unknown).catch(() => null)
+  const steps = new Map()
+  let rest = ''
+  for await (const { stream, text } of $.process.spawn({ argv: ['grep', '-F', '"type":"assistant"', `${dir}/${id}.jsonl`] })) {
+    if (stream !== 'stdout') continue
+    const lines = (rest + text).split('\n')
+    rest = lines.pop() ?? ''
+    for (const line of lines) addLine(steps, line)
+  }
+  addLine(steps, rest)
+  return runOf(descriptionOf(meta, id), steps)
+}
+
+// The session's subagents, from their transcripts beside the session's: <session>/subagents/agent-<id>.jsonl.
+// Agents a workflow ran (subagents/workflows/) are not counted.
+async function readSubagents($: EngineInterface): Promise<Subagents | null> {
+  const main = await read($, transcript)
+  if (!main) return null
+  const dir = `${main.replace(/\.jsonl$/, '')}/subagents`
+  const runs: AgentRun[] = []
+  for (const f of await $.fs.list(dir).catch(() => [])) {
+    const id = /^(agent-.+)\.jsonl$/.exec(f.name)?.[1]
+    if (f.kind !== 'file' || !id) continue
+    const path = `${dir}/${f.name}`
+    const stamp = `${f.mtimeMs}:${f.size}`
+    let known = agentRuns.get(path)
+    if (known?.stamp !== stamp) {
+      // An agent that can't be read now is left out and tried again on the next refresh.
+      const run = await readRun($, dir, id).catch(err => void $.ui.log(`chudarin-context-mod: ${f.name} not read: ${String(err)}`, { to: 'debug' }))
+      if (!run) continue
+      known = { stamp, run }
+      agentRuns.set(path, known)
+    }
+    runs.push(known.run)
+  }
+  return summarize(runs)
+}
+
 async function refresh($: EngineInterface) {
   const l = await readLang($)
   await update($, lang, () => l)
@@ -205,6 +252,7 @@ async function refresh($: EngineInterface) {
     threshold: b.isAutoCompactEnabled && b.autoCompactThreshold ? b.autoCompactThreshold : usage.context.window,
     window: usage.context.window,
     used: entries.reduce((n, e) => n + e.tokens, 0),
+    subagents: await readSubagents($),
   }
   await update($, snapshot, () => next)
   const five = usage.rateLimits.find(r => /five_hour/.test(r.kind) && !/fable/i.test(r.kind))
@@ -298,6 +346,12 @@ export const register: Register = on => {
     await update($, heaviest, () => null)
     await markDone($, p => !p.startsWith('/') && e.text.includes(p))
     if (!e.command && !e.isMeta) await saveLog($, addPrompt).catch(err => $.ui.log(`chudarin-context-mod: prompt not logged: ${String(err)}`))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Only the classic events carry the transcript's path; /clear and a resume change it.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await update($, transcript, () => e.transcript_path)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -420,6 +474,10 @@ export const register: Register = on => {
       const points = session?.points ?? []
       const fiveSpent = session?.limits?.five_hour?.spent ?? null
       const weekSpent = session?.limits?.seven_day?.spent ?? null
+      const agents = snap.subagents
+      // Each agent's figures, in a column as wide as the longest: they start in one place.
+      const agentNotes = agents?.top.map(r => t.agentPeak(k(r.peak), r.steps)) ?? []
+      const NOTE_W = Math.max(0, ...agentNotes.map(n => n.length))
       // Two empty columns on each side of every page; the grid fits inside them.
       const PAD = 2
       // The real width, however narrow: content wider than the pane wraps and breaks the grid.
@@ -1003,6 +1061,23 @@ export const register: Register = on => {
                   <HostText>
                     {t.compactsLine(session.compacts.length, k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
                   </HostText>
+                  {/* subagents: their reports alone reach the context, so what they processed shows here */}
+                  {agents && [
+                    <HostText>{t.agents(agents.count, k(agents.fresh + agents.cached))}</HostText>,
+                    <HostText>{t.agentsSplit(k(agents.fresh), k(agents.cached))}</HostText>,
+                    ...agents.top.map((r, i) => (
+                      <Box flexDirection="row" alignItems="flex-start" columnGap="sm">
+                        <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+                          <HostText>{r.description}</HostText>
+                        </Box>
+                        <Box width={NOTE_W} flexShrink={0}>
+                          <HostText dimColor tabular>
+                            {agentNotes[i]}
+                          </HostText>
+                        </Box>
+                      </Box>
+                    )),
+                  ]}
                 </Box>
               </Box>
             )}
@@ -1312,6 +1387,26 @@ export const register: Register = on => {
               <Text>
                 {t.compactsLine(session.compacts.length, k(session.compacts.reduce((n, c) => n + Math.max(0, c.before - c.after), 0)))}
               </Text>
+              {/* subagents: the three dearest under the totals, the figures at the right edge; a narrow
+                  pane puts them under the task */}
+              {agents && [
+                <Text>{t.agents(agents.count, k(agents.fresh + agents.cached))}</Text>,
+                <Text>{t.agentsSplit(k(agents.fresh), k(agents.cached))}</Text>,
+                ...agents.top.map((r, i) => {
+                  const note = agentNotes[i]!
+                  return compact ? (
+                    <Box flexDirection="column">
+                      <Text>{`  ${clip(r.description, W - 2)}`}</Text>
+                      <Text dimColor>{`    ${note}`}</Text>
+                    </Box>
+                  ) : (
+                    <Text>
+                      {`  ${fitCell(r.description, W - 3 - NOTE_W)} `}
+                      <Text dimColor>{note.padEnd(NOTE_W)}</Text>
+                    </Text>
+                  )
+                }),
+              ]}
               {sectionGap}
             </Box>
           )}

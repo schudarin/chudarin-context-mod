@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
 import type { SessionLog } from '../types'
+import { AGENT_A, AGENT_B, META_A, META_B } from './subagents.fixture'
 
 const props = {
   title: 'Контекст',
@@ -1674,3 +1675,95 @@ for (const surface of ['desktop', 'terminal'] as const)
     await $.session.measure({ context: { tokens: 720_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
     expect(JSON.stringify(await ui.drawn())).toContain('block-dynamics')
   })
+
+// The session's transcript is /p/s1.jsonl; its subagents' lie in /p/s1/subagents.
+const AGENTS_DIR = '/p/s1/subagents'
+const AGENT_TEXT: Record<string, string> = { [`${AGENTS_DIR}/agent-a.jsonl`]: AGENT_A, [`${AGENTS_DIR}/agent-b.jsonl`]: AGENT_B }
+const AGENT_META: Record<string, string> = { [`${AGENTS_DIR}/agent-a.meta.json`]: META_A, [`${AGENTS_DIR}/agent-b.meta.json`]: META_B }
+
+// The two agents' files as the engine would hand them over; `touchA` makes agent a's file newer.
+function stubAgents(on: Parameters<TestBody>[1]) {
+  let mtimeA = 1
+  const file = (name: string, kind: 'file' | 'dir' = 'file') => ({ name, kind, size: 10, mtimeMs: name === 'agent-a.jsonl' ? mtimeA : 1, isLink: false })
+  on('fs.list', (_$, e) =>
+    (e.path === AGENTS_DIR
+      ? { value: ['agent-a.jsonl', 'agent-a.meta.json', 'agent-b.jsonl', 'agent-b.meta.json'].map(n => file(n)).concat(file('workflows', 'dir')) }
+      : { value: [] }) as never,
+  )
+  on('fs.read', (_$, e) => ({ value: AGENT_META[e.path] }) as never)
+  on('classic.UserPromptSubmit', () => ({}))
+  const spawned: string[] = []
+  on('process.spawn', async function* (_$, e) {
+    const path = e.argv[e.argv.length - 1]!
+    spawned.push(path)
+    const text = AGENT_TEXT[path] ?? ''
+    // In pieces that cut lines, as a pipe hands them over.
+    for (let i = 0; i < text.length; i += 40) yield { stream: 'stdout' as const, text: text.slice(i, i + 40) }
+    return { value: { code: 0, signal: null } } as never
+  })
+  return { spawned, touchA: () => void (mtimeA += 1) }
+}
+const AGENTS_LOG = { ...OLD_LOG, startedAt: Date.parse('2026-10-17T18:00:00') }
+
+for (const surface of ['desktop', 'terminal'] as const)
+  test(`the session block shows what subagents processed, each file read again only once it changes (${surface})`, async (...env) => {
+    const [$, on] = env
+    const { spawned, touchA } = stubAgents(on)
+    const { mount } = await startAt(env, { stored: { 'session:new': AGENTS_LOG } })
+    // Before the first prompt the session's transcript is not known: no block.
+    const ui = await mount(surface)
+    expect(JSON.stringify(await ui.drawn())).not.toContain('Subagents')
+    await $.classic.UserPromptSubmit({ prompt: 'go', transcript_path: '/p/s1.jsonl' })
+    const measure = () => $.session.measure({ context: { tokens: 720_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+    await measure()
+    const text = JSON.stringify(await ui.drawn())
+    // 9.7k new (input + cache write + output) and 5k read from cache: 15k in all.
+    expect(text).toContain('Subagents: 2, processed 15k')
+    expect(text).toContain('New 9.7k, from cache 5k')
+    // The dearest first: its task, its biggest context and its steps.
+    expect(text.indexOf('Search code')).toBeLessThan(text.indexOf('Review task 5'))
+    expect(text).toContain('peak 8k · 1 step')
+    expect(text).toContain('peak 3.5k · 2 steps')
+    // The figures start in one column, however long each agent's are.
+    if (surface === 'terminal') {
+      const lines = drawnLines(await ui.drawn())
+      const row = (task: string) => lines.find(l => l.startsWith(`  ${task}`)) ?? ''
+      expect(row('Search code').trimEnd()).toEndWith('peak 8k · 1 step')
+      expect(row('Search code').indexOf('peak')).toBe(row('Review task 5').indexOf('peak'))
+    } else {
+      // A Box of one width around each agent's figures, the longest's ("peak 3.5k · 2 steps").
+      const noteBoxes = (n: unknown): unknown[] => {
+        if (!n || typeof n !== 'object') return []
+        const el = n as { type?: string; props?: { width?: number }; children?: unknown[] }
+        const own = el.type === 'Box' && el.children?.length === 1 && shownText(el.children[0]).startsWith('peak ') ? [el.props?.width] : []
+        return [...own, ...(el.children ?? []).flatMap(noteBoxes)]
+      }
+      expect(noteBoxes(await ui.drawn())).toEqual([19, 19])
+    }
+    expect(spawned.sort()).toEqual([`${AGENTS_DIR}/agent-a.jsonl`, `${AGENTS_DIR}/agent-b.jsonl`])
+    // Nothing changed: nothing read again. Agent a wrote on: only it is read again.
+    await measure()
+    expect(spawned.length).toBe(2)
+    touchA()
+    await measure()
+    expect(spawned.slice(2)).toEqual([`${AGENTS_DIR}/agent-a.jsonl`])
+  })
+
+test('a narrow pane puts each subagent\'s figures under its task', async (...env) => {
+  const [$, on] = env
+  stubAgents(on)
+  await startAt(env, { stored: { 'session:new': AGENTS_LOG } })
+  await $.classic.UserPromptSubmit({ prompt: 'go', transcript_path: '/p/s1.jsonl' })
+  await $.session.measure({ context: { tokens: 720_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] } as never)
+  const ui = await $.ui.mount({
+    plugin: 'chudarin-context-mod',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'chudarin-context-mod',
+    props: { ...props, bodyColumns: 40 } as never,
+  })
+  const lines = drawnLines(await ui.drawn())
+  const at = lines.indexOf('  Search code')
+  expect(at).toBeGreaterThan(-1)
+  expect(lines[at + 1]).toBe('    peak 8k · 1 step')
+})

@@ -45,7 +45,9 @@ From top to bottom:
 - **This session.** How long it has run and how many messages you sent, how much of the 5-hour and
   weekly limits it used, what one message costs on average, and the compactions. A long session
   makes every message dearer, since each one sends the whole context again. The limits are shared,
-  so sessions open side by side count too.
+  so sessions open side by side count too. If subagents ran: how many, how much they processed
+  (new and from cache), and the three dearest with their biggest context and number of steps. Only
+  a subagent's report reaches your context, so the rest of its work shows up only here.
 - **Context load chart**, folded. One column per turn, as tall as what that turn added, so a heavy
   turn stands out as a peak. Below it, the five biggest jumps with their cause (point at one
   to light its column), and every compaction.
@@ -98,6 +100,10 @@ the prompt.
 - **This session** adds up the rises of each limit's percent while the session runs, and counts
   the prompts you send (slash commands aside). The log is kept per session, survives a restart and `claude --resume`, and holds the last 30 sessions.
   It starts when the mod is installed; earlier history isn't counted.
+- **Subagents** are read from their transcripts next to the session's
+  (`<session>/subagents/agent-<id>.jsonl`) through `grep`, which passes on only the reply lines, so
+  a file of tens of MB is read line by line, not whole. The session's transcript path arrives with
+  your first message, so the lines show after it. Agents a workflow ran aren't counted.
 - **Limits** come from your plan's rate-limit windows. With an API key there are none, and the
   limit meters don't show.
 
@@ -108,6 +114,7 @@ Nothing leaves your machine. The mod makes no network calls.
 - Mods are an early-access part of Claude Code. An update can change the API and break the panel
   until I fix it.
 - Tested on macOS in a terminal and in the desktop app. VS Code and mobile aren't tested.
+- The subagent lines run `grep`, so it has to be on your PATH. They were checked only in a terminal.
 - Where an organization manages Claude Code, hooks on compaction don't run in plugins a person
   installs. The panel works, but the compaction lines in "This session" stay at zero.
 
