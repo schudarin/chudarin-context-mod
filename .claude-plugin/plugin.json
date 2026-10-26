@@ -1,7 +1,7 @@
 {
   "name": "chudarin-context-mod",
-  "version": "1.2.0",
-  "description": "A Claude Code mod: a side panel that shows what fills your context window, what your plan limits look like, and what each kind of action costs, with plain-language help for every item.",
+  "version": "1.2.1",
+  "description": "A Claude Code mod: a side panel that shows what fills your context window, what your plan limits look like, what each kind of action costs and what the session's subagents processed, with plain-language help for every item.",
   "author": {
     "name": "Sergey Chudarin",
     "url": "https://chudarin.com"

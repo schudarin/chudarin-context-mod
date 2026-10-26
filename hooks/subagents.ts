@@ -52,9 +52,10 @@ export function summarize(runs: readonly AgentRun[]): Subagents | null {
   }
 }
 
-// From agent-<id>.meta.json: the Agent call's task, else the agent type, else the file name.
+// From agent-<id>.meta.json: the Agent call's task, else the agent type, else the file name. The model
+// writes the task, so control characters (an escape sequence for the terminal) become spaces.
 export function descriptionOf(meta: unknown, fallback: string): string {
   const m = (meta ?? {}) as { description?: unknown; agentType?: unknown }
-  if (typeof m.description === 'string' && m.description) return m.description
-  return typeof m.agentType === 'string' && m.agentType ? m.agentType : fallback
+  const clean = (v: unknown) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim() : '')
+  return clean(m.description) || clean(m.agentType) || fallback
 }

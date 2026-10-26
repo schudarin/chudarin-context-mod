@@ -35,3 +35,8 @@ test('an agent is named by its task, else its type, else its file', () => {
   expect(descriptionOf({ agentType: 'Explore' }, 'agent-1')).toBe('Explore')
   expect(descriptionOf(null, 'agent-1')).toBe('agent-1')
 })
+
+// The task text is the model's: an escape sequence in it must not reach the terminal.
+test('control characters in a task become spaces', () => {
+  expect(descriptionOf({ description: 'a\u001b[2Jb\nc\u009b' }, 'agent-1')).toBe('a [2Jb c')
+})
